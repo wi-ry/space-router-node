@@ -100,6 +100,18 @@ jobs:
           SR_UPNP_ENABLED: "false"
           SR_NODE_PORT: "19090"
 
+      # Build macOS .pkg installer
+      - name: Build macOS package
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          PKG_VERSION="${VERSION#v}"
+          bash packaging/macos/build_pkg.sh \
+            --binary "dist/${{ matrix.artifact }}" \
+            --version "${PKG_VERSION}" \
+            --output "dist/${{ matrix.artifact }}.pkg"
+
       # Build Linux packages (.deb and .rpm) via nfpm
       - name: Build Linux packages
         if: runner.os == 'Linux'
@@ -127,6 +139,7 @@ jobs:
             dist/${{ matrix.artifact }}.exe
             dist/${{ matrix.artifact }}.deb
             dist/${{ matrix.artifact }}.rpm
+            dist/${{ matrix.artifact }}.pkg
 
   release:
     needs: build
