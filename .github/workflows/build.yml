@@ -104,14 +104,26 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
+          $nsisPath = "C:\Program Files (x86)\NSIS\makensis.exe"
+
+          # Check if NSIS is already pre-installed on the runner
+          if (Test-Path $nsisPath) {
+              Write-Host "NSIS already installed at $nsisPath"
+              exit 0
+          }
+
           # Retry choco install up to 3 times (Chocolatey CDN can be flaky)
           $maxRetries = 3
           for ($i = 1; $i -le $maxRetries; $i++) {
               Write-Host "Installing NSIS (attempt $i/$maxRetries)..."
               choco install nsis -y --no-progress 2>&1
-              if ($LASTEXITCODE -eq 0) { break }
+              # Verify makensis.exe actually exists (choco can return 0 with 0 packages on 503)
+              if (Test-Path $nsisPath) {
+                  Write-Host "NSIS installed successfully"
+                  break
+              }
               if ($i -lt $maxRetries) {
-                  Write-Host "Retry in 15 seconds..."
+                  Write-Host "makensis.exe not found after install, retrying in 15 seconds..."
                   Start-Sleep -Seconds 15
               } else {
                   Write-Error "Failed to install NSIS after $maxRetries attempts"
