@@ -97,6 +97,7 @@ jobs:
         run: |
           # Install nfpm via go install
           go install github.com/goreleaser/nfpm/v2/cmd/nfpm@latest
+          export PATH="$(go env GOPATH)/bin:$PATH"
 
           VERSION="${{ steps.version.outputs.version }}"
           # Strip leading 'v' for package version
