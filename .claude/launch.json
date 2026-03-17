@@ -1,0 +1,23 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "Home Node (daemon)",
+      "runtimeExecutable": "python3",
+      "runtimeArgs": ["-m", "app.main"],
+      "port": 9090
+    },
+    {
+      "name": "SpaceRouter GUI",
+      "runtimeExecutable": "python3",
+      "runtimeArgs": ["-m", "gui.app"],
+      "port": 9090
+    },
+    {
+      "name": "Tests",
+      "runtimeExecutable": "python3",
+      "runtimeArgs": ["-m", "pytest", "tests/", "-v", "--ignore=tests/e2e"],
+      "port": 0
+    }
+  ]
+}
