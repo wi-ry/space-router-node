@@ -38,24 +38,29 @@ logger = logging.getLogger(__name__)
 
 async def _run(settings_override=None, stop_event=None) -> None:  # noqa: ANN001
     s = settings_override or settings
+    stop_event_arg = stop_event
     if stop_event is None:
         stop_event = asyncio.Event()
 
-    if sys.platform != "win32":
-        loop = asyncio.get_running_loop()
-        for sig in (signal.SIGTERM, signal.SIGINT):
-            loop.add_signal_handler(sig, stop_event.set)
-    else:
-        # Windows: loop.add_signal_handler() is not supported.
-        # Use signal.signal() and schedule the event via call_soon_threadsafe
-        # since signal handlers can interrupt the event loop.
-        loop = asyncio.get_running_loop()
+    # Only install signal handlers when running as the main daemon (not from
+    # the GUI, which passes its own stop_event and runs _run() in a background
+    # thread where signal APIs are unavailable).
+    if stop_event_arg is None:
+        if sys.platform != "win32":
+            loop = asyncio.get_running_loop()
+            for sig in (signal.SIGTERM, signal.SIGINT):
+                loop.add_signal_handler(sig, stop_event.set)
+        else:
+            # Windows: loop.add_signal_handler() is not supported.
+            # Use signal.signal() and schedule the event via call_soon_threadsafe
+            # since signal handlers can interrupt the event loop.
+            loop = asyncio.get_running_loop()
 
-        def _handle_signal(signum, frame):  # noqa: ANN001
-            loop.call_soon_threadsafe(stop_event.set)
+            def _handle_signal(signum, frame):  # noqa: ANN001
+                loop.call_soon_threadsafe(stop_event.set)
 
-        signal.signal(signal.SIGINT, _handle_signal)
-        signal.signal(signal.SIGTERM, _handle_signal)
+            signal.signal(signal.SIGINT, _handle_signal)
+            signal.signal(signal.SIGTERM, _handle_signal)
 
     async with httpx.AsyncClient() as http_client:
         # 1. Try UPnP/NAT-PMP port mapping (if enabled)
@@ -230,7 +235,15 @@ def main() -> None:
     if len(sys.argv) > 1 and sys.argv[1] in ("--version", "-V"):
         print(f"space-router-node {__version__}")
         sys.exit(0)
-    asyncio.run(_run())
+    try:
+        asyncio.run(_run())
+    finally:
+        # Restore default signal handlers on Windows to avoid calling
+        # loop.call_soon_threadsafe() on the now-closed event loop if a
+        # late signal arrives between asyncio.run() returning and process exit.
+        if sys.platform == "win32":
+            signal.signal(signal.SIGINT, signal.SIG_DFL)
+            signal.signal(signal.SIGTERM, signal.SIG_DFL)
 
 
 if __name__ == "__main__":
