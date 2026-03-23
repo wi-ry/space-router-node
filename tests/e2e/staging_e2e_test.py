@@ -373,6 +373,7 @@ def _socks5_over_tls_request(cfg, target_host, target_port):
     sock = socket.create_connection(
         (cfg["gw_host"], cfg["gw_socks5_port"]), timeout=30,
     )
+    sock.settimeout(30)
 
     try:
         # 2. SOCKS5 greeting: support username/password auth (method 0x02)
@@ -410,14 +411,34 @@ def _socks5_over_tls_request(cfg, target_host, target_port):
         ).encode()
         sock.sendall(http_req)
 
-        # 6. Read response
-        chunks = []
-        while True:
+        # 6. Read response headers + body (parse Content-Length to avoid
+        #    blocking on recv after body is complete — the SOCKS5 tunnel
+        #    keeps the socket open even with Connection: close)
+        data = b""
+        while b"\r\n\r\n" not in data:
+            chunk = sock.recv(4096)
+            if not chunk:
+                return data.decode(errors="replace")
+            data += chunk
+
+        header_end = data.index(b"\r\n\r\n") + 4
+        headers = data[:header_end].decode(errors="replace").lower()
+        body_so_far = data[header_end:]
+
+        # Determine expected body length
+        content_length = 0
+        for line in headers.split("\r\n"):
+            if line.startswith("content-length:"):
+                content_length = int(line.split(":", 1)[1].strip())
+                break
+
+        while len(body_so_far) < content_length:
             chunk = sock.recv(4096)
             if not chunk:
                 break
-            chunks.append(chunk)
-        return b"".join(chunks).decode(errors="replace")
+            body_so_far += chunk
+
+        return data[:header_end].decode(errors="replace") + body_so_far.decode(errors="replace")
     finally:
         sock.close()
 
