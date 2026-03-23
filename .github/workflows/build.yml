@@ -417,16 +417,24 @@ jobs:
             --timestamp \
             "dist/SpaceRouter.app"
 
-      # Create .dmg from the (now signed) .app bundle
+      # Create .dmg from the (now signed) .app bundle.
+      # Retry because hdiutil can fail with "Resource busy" right after codesign
+      # while Gatekeeper/XProtect finishes scanning the signed bundle.
       - name: Package macOS DMG
         if: runner.os == 'macOS'
         shell: bash
         run: |
           if [ -d "dist/SpaceRouter.app" ]; then
-            hdiutil create -volname "SpaceRouter" \
-              -srcfolder "dist/SpaceRouter.app" \
-              -ov -format UDZO \
-              "dist/${{ matrix.artifact }}.dmg"
+            for attempt in 1 2 3; do
+              if hdiutil create -volname "SpaceRouter" \
+                   -srcfolder "dist/SpaceRouter.app" \
+                   -ov -format UDZO \
+                   "dist/${{ matrix.artifact }}.dmg"; then
+                break
+              fi
+              echo "hdiutil failed (attempt $attempt/3), retrying in 5s..."
+              sleep 5
+            done
           fi
 
       - name: Notarize macOS DMG
