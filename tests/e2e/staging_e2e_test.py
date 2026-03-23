@@ -368,13 +368,11 @@ def check_http_proxy_relay(cfg, node_id):
 # ---------------------------------------------------------------------------
 
 def _socks5_over_tls_request(cfg, target_host, target_port):
-    """Perform a SOCKS5 handshake over a TLS connection and send an HTTP request."""
-    # 1. Connect with TLS to the SOCKS5 gateway
-    ctx = ssl.create_default_context()
-    raw_sock = socket.create_connection(
+    """Perform a SOCKS5 handshake over a plain TCP connection and send an HTTP request."""
+    # 1. Connect to the SOCKS5 gateway (plain TCP — TLS removed per PR #112)
+    sock = socket.create_connection(
         (cfg["gw_host"], cfg["gw_socks5_port"]), timeout=30,
     )
-    sock = ctx.wrap_socket(raw_sock, server_hostname=cfg["gw_host"])
 
     try:
         # 2. SOCKS5 greeting: support username/password auth (method 0x02)
