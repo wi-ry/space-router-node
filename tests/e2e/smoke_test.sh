@@ -45,7 +45,16 @@ class Handler(http.server.BaseHTTPRequestHandler):
         self.send_response(200)
         self.send_header('Content-Type', 'application/json')
         self.end_headers()
-        self.wfile.write(json.dumps({'id': 'test-node-001'}).encode())
+        self.wfile.write(json.dumps({
+            'status': 'registered',
+            'node_id': 'test-node-001',
+            'identity_address': '0x0000000000000000000000000000000000000001',
+            'staking_address': '0x0000000000000000000000000000000000000001',
+            'collection_address': '0x0000000000000000000000000000000000000001',
+            'endpoint_url': 'https://127.0.0.1:19090',
+            'wallet_address': '0x0000000000000000000000000000000000000001',
+            'node_address': '0x0000000000000000000000000000000000000001',
+        }).encode())
     def do_PATCH(self):
         length = int(self.headers.get('Content-Length', 0))
         self.rfile.read(length)
