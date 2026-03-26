@@ -23,6 +23,12 @@ class Settings(BaseSettings):
     PUBLIC_IP: str = ""  # Auto-detected if empty
     WALLET_ADDRESS: str = ""  # Required — user-provided EVM address
 
+    # v0.2.0 multi-wallet: separate staking and collection addresses.
+    # When set, the node uses the v0.2.0 registration protocol.
+    # When empty, falls back to WALLET_ADDRESS (v0.1.2 compat).
+    STAKING_ADDRESS: str = ""
+    COLLECTION_ADDRESS: str = ""  # Defaults to STAKING_ADDRESS if empty
+
     # UPnP / NAT-PMP automatic port forwarding
     UPNP_ENABLED: bool = True
     UPNP_LEASE_DURATION: int = 3600  # seconds; 0 = permanent

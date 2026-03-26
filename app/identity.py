@@ -47,17 +47,26 @@ def load_or_create_identity(key_path: str) -> tuple[str, str]:
     return private_key, account.address.lower()
 
 
-def sign_request(private_key: str, action: str, target: str) -> tuple[str, int]:
+def sign_request(
+    private_key: str,
+    action: str,
+    target: str,
+    *,
+    timestamp: int | None = None,
+) -> tuple[str, int]:
     """Sign a Space Router API request.
 
     Creates an EIP-191 signature of ``space-router:{action}:{target}:{timestamp}``.
 
-    *target* is the ``node_id`` for most actions, or ``wallet_address`` for
-    registration.
+    *target* is the ``node_id`` for most actions, or ``staking_address`` for
+    registration.  Pass *timestamp* to reuse a previously generated value
+    (required when multiple signatures must share the same timestamp, e.g.
+    the identity and vouching signatures during v0.2.0 registration).
 
     Returns ``(signature_hex, timestamp)``.
     """
-    timestamp = int(time.time())
+    if timestamp is None:
+        timestamp = int(time.time())
     message_text = f"space-router:{action}:{target}:{timestamp}"
     message = encode_defunct(text=message_text)
     signed = _w3.eth.account.sign_message(message, private_key=private_key)

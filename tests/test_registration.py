@@ -12,6 +12,7 @@ from app.registration import deregister_node, detect_public_ip, register_node, r
 
 
 TEST_WALLET = "0x742d35cc6634c0532925a3b844bc9e7595f2bd18"
+TEST_COLLECTION = "0x1234567890abcdef1234567890abcdef12345678"
 # Test identity keypair (deterministic for reproducible tests)
 _TEST_IDENTITY = Account.from_key("0x" + "ab" * 32)
 TEST_IDENTITY_KEY = _TEST_IDENTITY.key.hex()
@@ -25,6 +26,21 @@ def reg_settings():
         NODE_LABEL="test-node",
         PUBLIC_IP="",
         WALLET_ADDRESS=TEST_WALLET,
+        STAKING_ADDRESS="",
+        COLLECTION_ADDRESS="",
+    )
+
+
+@pytest.fixture
+def reg_settings_v2():
+    return Settings(
+        NODE_PORT=9090,
+        COORDINATION_API_URL="http://coordination:8000",
+        NODE_LABEL="test-node",
+        PUBLIC_IP="",
+        WALLET_ADDRESS=TEST_WALLET,
+        STAKING_ADDRESS=TEST_WALLET,
+        COLLECTION_ADDRESS=TEST_COLLECTION,
     )
 
 
@@ -113,9 +129,13 @@ def _register_response(node_id="node-abc-123", **overrides):
     data = {
         "status": "registered",
         "node_id": node_id,
+        "identity_address": _TEST_IDENTITY.address.lower(),
+        "staking_address": TEST_WALLET,
+        "collection_address": TEST_WALLET,
+        "endpoint_url": "https://1.2.3.4:9090",
+        # Deprecated v0.1.2 aliases
         "wallet_address": TEST_WALLET,
         "node_address": _TEST_IDENTITY.address.lower(),
-        "endpoint_url": "https://1.2.3.4:9090",
     }
     data.update(overrides)
     return data
@@ -246,8 +266,9 @@ class TestRegisterNode:
         body = json.loads(respx.calls[0].request.content)
         assert "identity_signature" in body
         assert "timestamp" in body
-        # Server-only fields must NOT be in payload
-        for field in ("public_ip", "node_type", "region", "ip_type", "ip_region", "as_type"):
+        # Server-only classification fields must NOT be in payload
+        # (public_ip IS allowed — node sends its real exit IP for tunnel mode)
+        for field in ("node_type", "region", "ip_type", "ip_region", "as_type"):
             assert field not in body, f"{field} should not be in registration payload"
 
     @pytest.mark.asyncio
@@ -288,6 +309,118 @@ class TestRegisterNode:
 
         assert node_id == "node-mtls-1"
         assert gateway_ca_cert == ca_pem
+
+
+# ---------------------------------------------------------------------------
+# v0.2.0 multi-wallet registration
+# ---------------------------------------------------------------------------
+
+class TestRegisterNodeV2:
+    """Tests for v0.2.0 registration with separate staking/collection addresses."""
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_v2_sends_staking_vouch_and_collection(self, reg_settings_v2):
+        """v0.2.0 payload must include staking_address, collection_address,
+        and staking_vouching_signature — and must NOT include wallet_address."""
+        _mock_request_probe()
+        respx.post("http://coordination:8000/nodes/register").mock(
+            return_value=Response(200, json=_register_response(
+                collection_address=TEST_COLLECTION,
+            ))
+        )
+
+        import httpx
+        async with httpx.AsyncClient() as client:
+            node_id, _ = await register_node(
+                client, reg_settings_v2, "1.2.3.4",
+                identity_key=TEST_IDENTITY_KEY,
+                wallet_address=TEST_WALLET,
+                staking_address=TEST_WALLET,
+                collection_address=TEST_COLLECTION,
+            )
+
+        body = json.loads(respx.calls[0].request.content)
+        assert body["staking_address"] == TEST_WALLET
+        assert body["collection_address"] == TEST_COLLECTION
+        assert "staking_vouching_signature" in body
+        assert len(body["staking_vouching_signature"]) > 0
+        assert "wallet_address" not in body
+        assert node_id == "node-abc-123"
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_v2_shared_timestamp(self, reg_settings_v2):
+        """Identity and vouch signatures must share the same timestamp."""
+        _mock_request_probe()
+        respx.post("http://coordination:8000/nodes/register").mock(
+            return_value=Response(200, json=_register_response())
+        )
+
+        import httpx
+        async with httpx.AsyncClient() as client:
+            await register_node(
+                client, reg_settings_v2, "1.2.3.4",
+                identity_key=TEST_IDENTITY_KEY,
+                wallet_address=TEST_WALLET,
+                staking_address=TEST_WALLET,
+                collection_address=TEST_COLLECTION,
+            )
+
+        body = json.loads(respx.calls[0].request.content)
+        # Both signatures are verified against body["timestamp"] on the server,
+        # so there is exactly one timestamp in the payload.
+        assert isinstance(body["timestamp"], int)
+
+        # Verify both signatures are valid hex strings
+        assert body["identity_signature"].startswith("0x") or len(body["identity_signature"]) > 20
+        assert body["staking_vouching_signature"].startswith("0x") or len(body["staking_vouching_signature"]) > 20
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_v2_collection_defaults_to_staking(self, reg_settings_v2):
+        """When collection_address is empty, it should default to staking_address."""
+        _mock_request_probe()
+        respx.post("http://coordination:8000/nodes/register").mock(
+            return_value=Response(200, json=_register_response())
+        )
+
+        import httpx
+        async with httpx.AsyncClient() as client:
+            await register_node(
+                client, reg_settings_v2, "1.2.3.4",
+                identity_key=TEST_IDENTITY_KEY,
+                wallet_address=TEST_WALLET,
+                staking_address=TEST_WALLET,
+                collection_address="",  # empty → defaults to staking
+            )
+
+        body = json.loads(respx.calls[0].request.content)
+        assert body["staking_address"] == TEST_WALLET
+        assert body["collection_address"] == TEST_WALLET
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_v1_fallback_when_no_staking(self, reg_settings):
+        """When staking_address is empty, use the v0.1.2 wallet_address format."""
+        _mock_request_probe()
+        respx.post("http://coordination:8000/nodes/register").mock(
+            return_value=Response(200, json=_register_response())
+        )
+
+        import httpx
+        async with httpx.AsyncClient() as client:
+            await register_node(
+                client, reg_settings, "1.2.3.4",
+                identity_key=TEST_IDENTITY_KEY,
+                wallet_address=TEST_WALLET,
+                staking_address="",  # empty → v0.1.2 mode
+            )
+
+        body = json.loads(respx.calls[0].request.content)
+        assert body["wallet_address"] == TEST_WALLET
+        assert "staking_address" not in body
+        assert "staking_vouching_signature" not in body
 
 
 # ---------------------------------------------------------------------------

@@ -57,6 +57,8 @@ async def register_node(
     *,
     identity_key: str,
     wallet_address: str,
+    staking_address: str = "",
+    collection_address: str = "",
     upnp_endpoint: tuple | None = None,
 ) -> tuple[str, str | None]:
     """Register this node with the Coordination API.
@@ -64,6 +66,10 @@ async def register_node(
     Uses the unified ``POST /nodes/register`` endpoint with an identity
     signature.  The server recovers the node identity address from the
     signature.
+
+    When *staking_address* is provided, sends the v0.2.0 multi-wallet
+    payload (staking_address + collection_address + vouch signature).
+    Otherwise falls back to the v0.1.2 single wallet_address format.
 
     Returns ``(node_id, gateway_ca_cert_pem_or_None)``.
     Raises on failure — the caller should abort startup.
@@ -74,22 +80,57 @@ async def register_node(
     else:
         endpoint_url = f"https://{public_ip}:{settings.NODE_PORT}"
 
-    # Sign: space-router:register:{wallet_address}:{timestamp}
-    signature, timestamp = sign_request(identity_key, "register", wallet_address)
+    use_v2 = bool(staking_address)
 
-    payload = {
-        "wallet_address": wallet_address,
-        "endpoint_url": endpoint_url,
-        "identity_signature": signature,
-        "timestamp": timestamp,
-    }
+    # For tunnel setups (ngrok, bore), public_ip is the tunnel hostname
+    # but real_exit_ip is the node's actual residential IP for classification
+    real_exit_ip = getattr(settings, "_REAL_EXIT_IP", None)
+
+    if use_v2:
+        effective_collection = collection_address or staking_address
+
+        # Both signatures must share the same timestamp — the Coordination
+        # API verifies both against the single body.timestamp value.
+        signature, timestamp = sign_request(
+            identity_key, "register", staking_address,
+        )
+        vouch_signature, _ = sign_request(
+            identity_key, "vouch", staking_address, timestamp=timestamp,
+        )
+
+        payload = {
+            "staking_address": staking_address,
+            "collection_address": effective_collection,
+            "staking_vouching_signature": vouch_signature,
+            "endpoint_url": endpoint_url,
+            "identity_signature": signature,
+            "timestamp": timestamp,
+        }
+        log_wallet = f"staking={staking_address}, collection={effective_collection}"
+    else:
+        # v0.1.2 fallback — single wallet_address
+        signature, timestamp = sign_request(
+            identity_key, "register", wallet_address,
+        )
+        payload = {
+            "wallet_address": wallet_address,
+            "endpoint_url": endpoint_url,
+            "identity_signature": signature,
+            "timestamp": timestamp,
+        }
+        log_wallet = f"wallet={wallet_address}"
+
+    # Send real exit IP for IPinfo classification (tunnel mode)
+    if real_exit_ip:
+        payload["public_ip"] = real_exit_ip
+
     if settings.NODE_LABEL:
         payload["label"] = settings.NODE_LABEL
 
     url = f"{settings.COORDINATION_API_URL}/nodes/register"
     logger.info(
-        "Registering node at %s → endpoint=%s wallet=%s",
-        url, endpoint_url, wallet_address,
+        "Registering node at %s → endpoint=%s %s (protocol=%s)",
+        url, endpoint_url, log_wallet, "v0.2.0" if use_v2 else "v0.1.2",
     )
 
     resp = await http_client.post(url, json=payload, timeout=15.0)
@@ -98,12 +139,12 @@ async def register_node(
 
     node_id = data["node_id"]
     gateway_ca_cert = data.get("gateway_ca_cert")
-    node_address = data.get("node_address", "unknown")
+    identity_address = data.get("identity_address") or data.get("node_address", "unknown")
     reg_status = data.get("status", "registered")
 
     logger.info(
-        "Registered as node %s (status=%s, identity=%s, wallet=%s, mtls_ca=%s)",
-        node_id, reg_status, node_address, wallet_address,
+        "Registered as node %s (status=%s, identity=%s, %s, mtls_ca=%s)",
+        node_id, reg_status, identity_address, log_wallet,
         "provided" if gateway_ca_cert else "not provided",
     )
 
@@ -122,6 +163,11 @@ def save_gateway_ca_cert(pem_data: str, path: str) -> None:
     logger.info("Gateway CA certificate saved to %s", path)
 
 
+def _effective_wallet(settings: Settings) -> str:
+    """Return the best wallet address for authenticated requests."""
+    return (settings.STAKING_ADDRESS or settings.WALLET_ADDRESS).lower()
+
+
 async def request_probe(
     http_client: httpx.AsyncClient,
     settings: Settings,
@@ -135,7 +181,7 @@ async def request_probe(
     url = f"{settings.COORDINATION_API_URL}/nodes/{node_id}/request-probe"
     try:
         resp = await http_client.post(url, json={
-            "wallet_address": settings.WALLET_ADDRESS.lower(),
+            "wallet_address": _effective_wallet(settings),
             "signature": signature,
             "timestamp": timestamp,
         }, timeout=10.0)
@@ -163,7 +209,7 @@ async def deregister_node(
     try:
         resp = await http_client.patch(url, json={
             "status": "offline",
-            "wallet_address": settings.WALLET_ADDRESS.lower(),
+            "wallet_address": _effective_wallet(settings),
             "signature": signature,
             "timestamp": timestamp,
         }, timeout=10.0)
