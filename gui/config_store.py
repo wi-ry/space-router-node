@@ -141,6 +141,47 @@ class ConfigStore:
         set_key(str(self._path), "SR_COORDINATION_API_URL", coordination_api_url)
         set_key(str(self._path), "SR_MTLS_ENABLED", str(mtls_enabled).lower())
 
+    def save_network_mode(self, mode: str, public_host: str = "") -> None:
+        """Persist network mode settings.
+
+        Args:
+            mode: 'upnp' or 'tunnel'
+            public_host: hostname/IP for tunnel mode (e.g. 'bore.pub')
+        """
+        if mode == "upnp":
+            set_key(str(self._path), "SR_UPNP_ENABLED", "true")
+            set_key(str(self._path), "SR_PUBLIC_IP", "")
+        elif mode == "tunnel":
+            set_key(str(self._path), "SR_UPNP_ENABLED", "false")
+            set_key(str(self._path), "SR_PUBLIC_IP", public_host)
+
+    def get_network_mode(self) -> dict:
+        """Return current network mode settings."""
+        upnp = self.get("SR_UPNP_ENABLED", "true").lower() == "true"
+        public_ip = self.get("SR_PUBLIC_IP", "")
+        if upnp:
+            return {"mode": "upnp", "public_host": ""}
+        else:
+            return {"mode": "tunnel", "public_host": public_ip}
+
+    def reset(self, keep_addresses: bool = False) -> None:
+        """Reset config to defaults. Optionally keep wallet addresses."""
+        saved = {}
+        if keep_addresses:
+            saved["SR_STAKING_ADDRESS"] = self.get("SR_STAKING_ADDRESS")
+            saved["SR_COLLECTION_ADDRESS"] = self.get("SR_COLLECTION_ADDRESS")
+            saved["SR_WALLET_ADDRESS"] = self.get("SR_WALLET_ADDRESS")
+
+        # Rewrite with defaults
+        lines = [f"{k}={v}" for k, v in _DEFAULTS.items()]
+        self._path.write_text("\n".join(lines) + "\n")
+
+        # Restore addresses if requested
+        if keep_addresses:
+            for key, value in saved.items():
+                if value:
+                    set_key(str(self._path), key, value)
+
     def apply_to_env(self) -> None:
         """Load all config values into os.environ so pydantic-settings picks them up."""
         for key, value in self.load().items():

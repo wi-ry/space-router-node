@@ -118,3 +118,35 @@ class Api:
         except Exception as exc:
             logger.exception("Failed to save settings")
             return {"ok": False, "error": str(exc)}
+
+    def get_network_mode(self) -> dict:
+        """Return current network mode (upnp or tunnel)."""
+        return self._config.get_network_mode()
+
+    def save_network_mode(self, mode: str, public_host: str = "") -> dict:
+        """Save network mode. Requires node restart."""
+        try:
+            self._config.save_network_mode(mode, public_host)
+            return {"ok": True}
+        except Exception as exc:
+            logger.exception("Failed to save network mode")
+            return {"ok": False, "error": str(exc)}
+
+    def fresh_restart(self, keep_addresses: bool = False) -> dict:
+        """Stop node, reset config, return to onboarding.
+
+        Args:
+            keep_addresses: if True, preserves staking/collection addresses.
+        """
+        try:
+            self._node.stop()
+            self._config.reset(keep_addresses=keep_addresses)
+            # Clear env vars so next start picks up fresh config
+            import os
+            for key in list(os.environ.keys()):
+                if key.startswith("SR_"):
+                    del os.environ[key]
+            return {"ok": True}
+        except Exception as exc:
+            logger.exception("Failed to fresh restart")
+            return {"ok": False, "error": str(exc)}

@@ -102,6 +102,55 @@
       <div id="error-banner" class="error-banner" style="display: none;">
         <span id="error-text"></span>
       </div>
+
+      <button id="btn-fresh-restart" class="btn-danger">Fresh Restart</button>
+    </div>
+  </div>
+
+  <!-- Fresh Restart Confirmation Dialog -->
+  <div id="screen-fresh-restart" class="screen" style="display: none;">
+    <div class="container">
+      <h2>Fresh Restart</h2>
+      <p class="description">This will stop the node and reset all settings to defaults.</p>
+      <p class="description">Would you like to keep your wallet addresses?</p>
+      <div class="restart-actions">
+        <button id="btn-restart-keep" class="btn-primary">Keep Addresses</button>
+        <button id="btn-restart-clear" class="btn-secondary">Clear Everything</button>
+        <button id="btn-restart-cancel" class="btn-back">Cancel</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Network Setup Screen (shown during onboarding) -->
+  <div id="screen-network" class="screen" style="display: none;">
+    <div class="container">
+      <h2>Network Setup</h2>
+      <p class="description">How is your node reachable from the internet?</p>
+
+      <div class="network-options">
+        <label class="radio-card" id="card-upnp">
+          <input type="radio" name="network-mode" value="upnp" checked>
+          <div class="radio-card-content">
+            <span class="radio-card-title">UPnP (Automatic)</span>
+            <span class="radio-card-desc">Your router supports UPnP and can automatically open ports. Works for most home networks.</span>
+          </div>
+        </label>
+        <label class="radio-card" id="card-tunnel">
+          <input type="radio" name="network-mode" value="tunnel">
+          <div class="radio-card-content">
+            <span class="radio-card-title">Tunnel / Manual</span>
+            <span class="radio-card-desc">You're behind CGNAT or using a tunnel (bore, ngrok, etc). Enter your public hostname or IP.</span>
+          </div>
+        </label>
+      </div>
+
+      <div id="tunnel-config" class="input-group" style="display: none;">
+        <label for="tunnel-host">Public Hostname or IP</label>
+        <input type="text" id="tunnel-host" placeholder="e.g. bore.pub" spellcheck="false" autocomplete="off">
+        <span class="hint">The hostname or IP that the coordination API can reach your node at.</span>
+      </div>
+
+      <button id="btn-network-continue" class="btn-primary">Continue</button>
     </div>
   </div>
 

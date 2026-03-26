@@ -28,6 +28,22 @@ function hide(id) {
   document.getElementById(id).style.display = "none";
 }
 
+function hideAll() {
+  for (const id of [
+    "screen-onboarding",
+    "screen-status",
+    "screen-settings",
+    "screen-fresh-restart",
+    "screen-network",
+  ]) {
+    hide(id);
+  }
+  if (statusPollId) {
+    clearInterval(statusPollId);
+    statusPollId = null;
+  }
+}
+
 function truncateAddress(addr) {
   if (!addr || addr.length < 12) return addr || "-";
   return addr.slice(0, 6) + "..." + addr.slice(-4);
@@ -65,6 +81,71 @@ function envLabel(envKey) {
   return labels[envKey] || envKey;
 }
 
+// ── Network Setup Screen ──
+
+function initNetworkSetup(onComplete) {
+  const radios = document.querySelectorAll('input[name="network-mode"]');
+  const tunnelConfig = $("#tunnel-config");
+  const tunnelHost = $("#tunnel-host");
+  const continueBtn = $("#btn-network-continue");
+
+  // Show/hide tunnel config
+  for (const radio of radios) {
+    radio.addEventListener("change", function () {
+      tunnelConfig.style.display = this.value === "tunnel" ? "block" : "none";
+    });
+  }
+
+  continueBtn.addEventListener("click", async function () {
+    const selected = document.querySelector('input[name="network-mode"]:checked');
+    const mode = selected ? selected.value : "upnp";
+
+    let publicHost = "";
+    if (mode === "tunnel") {
+      publicHost = tunnelHost.value.trim();
+      if (!publicHost) {
+        tunnelHost.classList.add("invalid");
+        return;
+      }
+      tunnelHost.classList.remove("invalid");
+    }
+
+    continueBtn.disabled = true;
+    continueBtn.textContent = "Saving...";
+
+    try {
+      const result = await window.pywebview.api.save_network_mode(mode, publicHost);
+      if (result.ok) {
+        onComplete();
+      }
+    } catch (e) {
+      // ignore
+    }
+
+    continueBtn.disabled = false;
+    continueBtn.textContent = "Continue";
+  });
+}
+
+async function showNetworkSetup(onComplete) {
+  // Pre-fill with current settings
+  try {
+    const net = await window.pywebview.api.get_network_mode();
+    const radio = document.querySelector(
+      'input[name="network-mode"][value="' + net.mode + '"]'
+    );
+    if (radio) radio.checked = true;
+    $("#tunnel-config").style.display = net.mode === "tunnel" ? "block" : "none";
+    if (net.public_host) {
+      $("#tunnel-host").value = net.public_host;
+    }
+  } catch (e) {}
+
+  initNetworkSetup(onComplete);
+  hideAll();
+  show("screen-network");
+}
+
 // ── Onboarding Screen ──
 
 function validateInputs() {
@@ -85,7 +166,8 @@ function validateInputs() {
     stakingError.textContent = "";
     stakingInput.classList.remove("invalid");
   } else if (!EVM_RE.test(stakingVal)) {
-    stakingError.textContent = "Invalid address — expected 0x followed by 40 hex characters";
+    stakingError.textContent =
+      "Invalid address — expected 0x followed by 40 hex characters";
     stakingInput.classList.add("invalid");
   } else {
     stakingError.textContent = "";
@@ -98,7 +180,8 @@ function validateInputs() {
     collectionError.textContent = "";
     collectionInput.classList.remove("invalid");
   } else if (!EVM_RE.test(collectionVal)) {
-    collectionError.textContent = "Invalid address — expected 0x followed by 40 hex characters";
+    collectionError.textContent =
+      "Invalid address — expected 0x followed by 40 hex characters";
     collectionInput.classList.add("invalid");
     collectionValid = false;
   } else {
@@ -130,10 +213,11 @@ function initOnboarding() {
 
     try {
       const result = await window.pywebview.api.save_wallet_and_start(
-        stakingAddr, collectionAddr
+        stakingAddr,
+        collectionAddr
       );
       if (result.ok) {
-        hide("screen-onboarding");
+        hideAll();
         showStatus();
       } else {
         stakingError.textContent = result.error || "Unknown error";
@@ -146,6 +230,12 @@ function initOnboarding() {
       btn.textContent = "Start SpaceRouter";
     }
   });
+}
+
+function showOnboarding() {
+  hideAll();
+  show("screen-onboarding");
+  initOnboarding();
 }
 
 // ── Status Dashboard ──
@@ -213,6 +303,75 @@ async function updateStatus() {
   }
 }
 
+// ── Fresh Restart ──
+
+function initFreshRestart() {
+  $("#btn-fresh-restart").addEventListener("click", function () {
+    hideAll();
+    show("screen-fresh-restart");
+  });
+
+  $("#btn-restart-cancel").addEventListener("click", function () {
+    hideAll();
+    showStatus();
+  });
+
+  $("#btn-restart-keep").addEventListener("click", async function () {
+    await doFreshRestart(true);
+  });
+
+  $("#btn-restart-clear").addEventListener("click", async function () {
+    await doFreshRestart(false);
+  });
+}
+
+async function doFreshRestart(keepAddresses) {
+  const btn = keepAddresses ? $("#btn-restart-keep") : $("#btn-restart-clear");
+  btn.disabled = true;
+  btn.textContent = "Resetting...";
+
+  try {
+    const result = await window.pywebview.api.fresh_restart(keepAddresses);
+    if (!result.ok) {
+      btn.disabled = false;
+      btn.textContent = keepAddresses ? "Keep Addresses" : "Clear Everything";
+      return;
+    }
+
+    // Go to network setup, then onboarding
+    showNetworkSetup(function () {
+      // Pre-fill addresses if kept
+      hideAll();
+      show("screen-onboarding");
+      initOnboarding();
+
+      if (keepAddresses) {
+        // Reload addresses from config
+        loadSavedAddresses();
+      }
+    });
+  } catch (e) {
+    btn.disabled = false;
+    btn.textContent = keepAddresses ? "Keep Addresses" : "Clear Everything";
+  }
+}
+
+async function loadSavedAddresses() {
+  try {
+    const status = await window.pywebview.api.get_status();
+    if (status.staking_address) {
+      $("#staking-input").value = status.staking_address;
+    }
+    if (
+      status.collection_address &&
+      status.collection_address !== status.staking_address
+    ) {
+      $("#collection-input").value = status.collection_address;
+    }
+    validateInputs();
+  } catch (e) {}
+}
+
 // ── Settings Panel (test builds only) ──
 
 function initSettings() {
@@ -267,13 +426,13 @@ function initSettings() {
     }
 
     statusEl.textContent = "";
-    hide("screen-status");
+    hideAll();
     show("screen-settings");
   });
 
   // Back button
   $("#btn-back").addEventListener("click", function () {
-    hide("screen-settings");
+    hideAll();
     showStatus();
   });
 
@@ -319,7 +478,7 @@ function initSettings() {
       saveBtn.textContent = "Save & Restart Node";
 
       // Go back to status
-      hide("screen-settings");
+      hideAll();
       showStatus();
     } catch (e) {
       statusEl.textContent = "Failed to save settings";
@@ -371,12 +530,17 @@ async function init() {
   try {
     const needsOnboarding = await window.pywebview.api.needs_onboarding();
 
-    // Variant setup is non-blocking — don't let it prevent screens from showing
+    // Variant setup is non-blocking
     initTestVariant();
 
+    // Fresh restart is always available
+    initFreshRestart();
+
     if (needsOnboarding) {
-      show("screen-onboarding");
-      initOnboarding();
+      // First time: show network setup, then onboarding
+      showNetworkSetup(function () {
+        showOnboarding();
+      });
     } else {
       // Already configured — start node and show status
       await window.pywebview.api.start_node();

@@ -288,6 +288,118 @@ h2 {
   text-align: left;
 }
 
+/* Fresh Restart / Danger button */
+.btn-danger {
+  width: 100%;
+  padding: 12px 24px;
+  background: transparent;
+  color: #e74c3c;
+  border: 1px solid rgba(231, 76, 60, 0.3);
+  border-radius: 8px;
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.2s, border-color 0.2s;
+  margin-top: 24px;
+}
+
+.btn-danger:hover {
+  background: rgba(231, 76, 60, 0.1);
+  border-color: rgba(231, 76, 60, 0.5);
+}
+
+/* Secondary button */
+.btn-secondary {
+  width: 100%;
+  padding: 14px 24px;
+  background: transparent;
+  color: #e74c3c;
+  border: 1px solid rgba(231, 76, 60, 0.4);
+  border-radius: 8px;
+  font-size: 15px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.2s;
+}
+
+.btn-secondary:hover {
+  background: rgba(231, 76, 60, 0.1);
+}
+
+/* Restart actions */
+.restart-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-top: 24px;
+}
+
+.restart-actions .btn-back {
+  text-align: center;
+  margin-top: 4px;
+}
+
+/* Network setup radio cards */
+.network-options {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-top: 20px;
+  margin-bottom: 20px;
+}
+
+.radio-card {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 16px;
+  background: #1a1a2e;
+  border: 1px solid #2a2a40;
+  border-radius: 10px;
+  cursor: pointer;
+  transition: border-color 0.2s;
+  text-align: left;
+}
+
+.radio-card:hover {
+  border-color: #4a4a60;
+}
+
+.radio-card input[type="radio"] {
+  margin-top: 2px;
+  accent-color: #6C5CE7;
+  flex-shrink: 0;
+}
+
+.radio-card input[type="radio"]:checked ~ .radio-card-content .radio-card-title {
+  color: #ffffff;
+}
+
+.radio-card-content {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.radio-card-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: #c0c0d8;
+}
+
+.radio-card-desc {
+  font-size: 12px;
+  line-height: 1.5;
+  color: #8080a0;
+}
+
+.hint {
+  display: block;
+  font-size: 11px;
+  color: #606078;
+  margin-top: 6px;
+}
+
 /* ── Test Build Banner ── */
 .test-banner {
   position: fixed;
