@@ -37,11 +37,15 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-async def _run(settings_override=None, stop_event=None) -> None:  # noqa: ANN001
+async def _run(settings_override=None, stop_event=None, on_phase=None) -> None:  # noqa: ANN001
     s = settings_override or settings
     stop_event_arg = stop_event
     if stop_event is None:
         stop_event = asyncio.Event()
+
+    def _report(phase: str) -> None:
+        if on_phase:
+            on_phase(phase)
 
     # Only install signal handlers when running as the main daemon (not from
     # the GUI, which passes its own stop_event and runs _run() in a background
@@ -84,28 +88,64 @@ async def _run(settings_override=None, stop_event=None) -> None:  # noqa: ANN001
                 )
 
         # 2. Detect public IP (needed for registration endpoint_url)
+        #    Always detect the real exit IP for classification, even when
+        #    SR_PUBLIC_IP is set (it may be a tunnel hostname like bore.pub).
+        try:
+            real_ip = await detect_public_ip(http_client)
+        except RuntimeError:
+            real_ip = None
+
         if s.PUBLIC_IP:
             public_ip = s.PUBLIC_IP
             logger.info("Using configured public IP: %s", public_ip)
+            if real_ip and real_ip != public_ip:
+                logger.info("Detected exit IP: %s (differs from configured — tunnel mode)", real_ip)
         else:
-            try:
-                public_ip = await detect_public_ip(http_client)
-            except RuntimeError:
+            if not real_ip:
                 logger.error("Cannot detect public IP — aborting")
                 sys.exit(1)
+            public_ip = real_ip
+            logger.info("Detected public IP: %s", public_ip)
         s.PUBLIC_IP = public_ip
+        s._REAL_EXIT_IP = real_ip  # actual IP seen by external services
 
-        # 3. Validate wallet address (required — set via SR_WALLET_ADDRESS)
-        if not s.WALLET_ADDRESS:
-            logger.error("SR_WALLET_ADDRESS is required — aborting")
-            sys.exit(1)
-        try:
-            s.WALLET_ADDRESS = validate_wallet_address(s.WALLET_ADDRESS)
-        except ValueError as exc:
-            logger.error("Invalid wallet address: %s — aborting", exc)
-            sys.exit(1)
-        wallet_address = s.WALLET_ADDRESS
-        logger.info("Wallet address: %s", wallet_address)
+        # 3. Validate wallet addresses
+        #    v0.2.0: SR_STAKING_ADDRESS + SR_COLLECTION_ADDRESS (preferred)
+        #    v0.1.2: SR_WALLET_ADDRESS only (backward compat)
+        staking_address = s.STAKING_ADDRESS.strip()
+        collection_address = s.COLLECTION_ADDRESS.strip()
+
+        if staking_address:
+            try:
+                staking_address = validate_wallet_address(staking_address)
+            except ValueError as exc:
+                logger.error("Invalid staking address: %s — aborting", exc)
+                sys.exit(1)
+            if collection_address:
+                try:
+                    collection_address = validate_wallet_address(collection_address)
+                except ValueError as exc:
+                    logger.error("Invalid collection address: %s — aborting", exc)
+                    sys.exit(1)
+            else:
+                collection_address = staking_address
+            # Also set WALLET_ADDRESS for any code that reads it
+            wallet_address = staking_address
+            s.WALLET_ADDRESS = staking_address
+            logger.info("Staking address: %s (v0.2.0)", staking_address)
+            logger.info("Collection address: %s", collection_address)
+        else:
+            # v0.1.2 fallback — single wallet address
+            if not s.WALLET_ADDRESS:
+                logger.error("SR_STAKING_ADDRESS or SR_WALLET_ADDRESS is required — aborting")
+                sys.exit(1)
+            try:
+                s.WALLET_ADDRESS = validate_wallet_address(s.WALLET_ADDRESS)
+            except ValueError as exc:
+                logger.error("Invalid wallet address: %s — aborting", exc)
+                sys.exit(1)
+            wallet_address = s.WALLET_ADDRESS
+            logger.info("Wallet address: %s (v0.1.2 compat)", wallet_address)
 
         # 3b. Load or create node identity keypair
         identity_key, node_address = load_or_create_identity(s.IDENTITY_KEY_PATH)
@@ -125,6 +165,7 @@ async def _run(settings_override=None, stop_event=None) -> None:  # noqa: ANN001
         # 5. Register with Coordination API (triggers challenge probe)
         #    Retry with exponential back-off so transient failures
         #    (e.g. Coordination API rollout) don't kill the node.
+        _report("registering")
         max_retries = int(os.environ.get("SR_REGISTER_MAX_RETRIES", "5"))
         backoff = 5  # seconds, doubles each retry
         for attempt in range(1, max_retries + 1):
@@ -134,6 +175,8 @@ async def _run(settings_override=None, stop_event=None) -> None:  # noqa: ANN001
                     identity_key=identity_key,
                     upnp_endpoint=upnp_endpoint,
                     wallet_address=wallet_address,
+                    staking_address=staking_address,
+                    collection_address=collection_address,
                 )
                 break  # success
             except Exception:
@@ -185,9 +228,11 @@ async def _run(settings_override=None, stop_event=None) -> None:  # noqa: ANN001
                         exc_info=True,
                     )
 
+        display_wallet = staking_address or wallet_address
+        _report("running")
         logger.info(
             "Home Node ready (node_id=%s, wallet=%s, upnp=%s)",
-            node_id, wallet_address,
+            node_id, display_wallet,
             f"{upnp_endpoint[0]}:{upnp_endpoint[1]}" if upnp_endpoint else "disabled",
         )
 
