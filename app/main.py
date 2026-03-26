@@ -495,6 +495,9 @@ def main() -> None:
         sys.exit(0)
     try:
         asyncio.run(_run())
+    except NodeError as exc:
+        logger.error("Node failed: %s", exc.user_message)
+        sys.exit(1)
     finally:
         if sys.platform == "win32":
             signal.signal(signal.SIGINT, signal.SIG_DFL)

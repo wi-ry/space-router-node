@@ -78,8 +78,9 @@ def _run_smoke_tests(window, api: Api) -> None:
     )
 
     check(
-        "Either onboarding or status screen is visible",
+        "A screen is visible (network, onboarding, or status)",
         lambda: window.evaluate_js(
+            "document.getElementById('screen-network').style.display === 'flex' || "
             "document.getElementById('screen-onboarding').style.display === 'flex' || "
             "document.getElementById('screen-status').style.display === 'flex'"
         )
