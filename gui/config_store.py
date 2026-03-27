@@ -9,6 +9,7 @@ from pathlib import Path
 
 from dotenv import dotenv_values, set_key
 
+from app.identity import write_identity_key
 from app.wallet import validate_wallet_address
 
 # Default Coordination API for production
@@ -36,13 +37,14 @@ ENVIRONMENTS = {
 
 _DEFAULTS = {
     "SR_COORDINATION_API_URL": _DEFAULT_COORDINATION_API_URL,
-    "SR_WALLET_ADDRESS": "",
     "SR_STAKING_ADDRESS": "",
     "SR_COLLECTION_ADDRESS": "",
     "SR_NODE_PORT": "9090",
     "SR_UPNP_ENABLED": "true",
     "SR_MTLS_ENABLED": "true",
     "SR_LOG_LEVEL": "INFO",
+    "SR_REGISTRATION_MODE": "v1",
+    "SR_IDENTITY_PASSPHRASE": "",
 }
 
 
@@ -73,6 +75,14 @@ class ConfigStore:
         if not self._path.exists():
             lines = [f"{k}={v}" for k, v in _DEFAULTS.items()]
             self._path.write_text("\n".join(lines) + "\n")
+        else:
+            self._migrate_wallet_address()
+
+    def _migrate_wallet_address(self) -> None:
+        """Migrate SR_WALLET_ADDRESS → SR_STAKING_ADDRESS for existing configs."""
+        vals = dotenv_values(self._path)
+        if vals.get("SR_WALLET_ADDRESS") and not vals.get("SR_STAKING_ADDRESS"):
+            set_key(str(self._path), "SR_STAKING_ADDRESS", vals["SR_WALLET_ADDRESS"])
 
     @property
     def path(self) -> Path:
@@ -85,12 +95,6 @@ class ConfigStore:
     def get(self, key: str, default: str = "") -> str:
         vals = self.load()
         return vals.get(key) or default
-
-    def save_wallet(self, address: str) -> str:
-        """Validate and persist the wallet address. Returns normalised address."""
-        normalised = validate_wallet_address(address)
-        set_key(str(self._path), "SR_WALLET_ADDRESS", normalised)
-        return normalised
 
     def save_wallets(self, staking_address: str, collection_address: str = "") -> tuple[str, str]:
         """Validate and persist staking and collection addresses.
@@ -105,9 +109,6 @@ class ConfigStore:
         else:
             normalised_collection = normalised_staking
         set_key(str(self._path), "SR_COLLECTION_ADDRESS", normalised_collection)
-
-        # Also set WALLET_ADDRESS for backward compat
-        set_key(str(self._path), "SR_WALLET_ADDRESS", normalised_staking)
 
         return normalised_staking, normalised_collection
 
@@ -131,10 +132,43 @@ class ConfigStore:
         return "custom"
 
     def needs_onboarding(self) -> bool:
-        """True if no wallet/staking address has been configured yet."""
-        staking = self.get("SR_STAKING_ADDRESS")
-        wallet = self.get("SR_WALLET_ADDRESS")
-        return not staking and not wallet
+        """True if the identity key file has not been created yet."""
+        key_path = self.get("SR_IDENTITY_KEY_PATH") or str(
+            self._dir / "certs" / "node-identity.key"
+        )
+        return not os.path.isfile(key_path)
+
+    def save_onboarding(
+        self,
+        passphrase: str = "",
+        staking: str = "",
+        collection: str = "",
+        identity_key_hex: str = "",
+    ) -> None:
+        """Persist onboarding choices and optionally pre-write an imported identity key.
+
+        - *passphrase*: written as SR_IDENTITY_PASSPHRASE (may be empty).
+        - *staking*: staking wallet address; empty → uses identity address at runtime.
+        - *collection*: collection wallet address; empty → uses staking address.
+        - *identity_key_hex*: if provided, the raw private key is written to the
+          identity key file immediately (encrypted if *passphrase* is set).
+        """
+        if staking:
+            staking = validate_wallet_address(staking)
+        if collection:
+            collection = validate_wallet_address(collection)
+
+        set_key(str(self._path), "SR_IDENTITY_PASSPHRASE", passphrase)
+        if staking:
+            set_key(str(self._path), "SR_STAKING_ADDRESS", staking)
+        if collection:
+            set_key(str(self._path), "SR_COLLECTION_ADDRESS", collection)
+
+        if identity_key_hex:
+            key_path = self.get("SR_IDENTITY_KEY_PATH") or str(
+                self._dir / "certs" / "node-identity.key"
+            )
+            write_identity_key(key_path, identity_key_hex, passphrase)
 
     def save_settings(self, coordination_api_url: str, mtls_enabled: bool) -> None:
         """Persist advanced settings (coordination API URL and mTLS toggle)."""
@@ -175,7 +209,6 @@ class ConfigStore:
         if keep_addresses:
             saved["SR_STAKING_ADDRESS"] = self.get("SR_STAKING_ADDRESS")
             saved["SR_COLLECTION_ADDRESS"] = self.get("SR_COLLECTION_ADDRESS")
-            saved["SR_WALLET_ADDRESS"] = self.get("SR_WALLET_ADDRESS")
 
         # Rewrite with defaults
         lines = [f"{k}={v}" for k, v in _DEFAULTS.items()]
@@ -193,7 +226,7 @@ class ConfigStore:
             if value and key not in os.environ:
                 os.environ[key] = value
 
-        # Point TLS cert and identity key paths to the writable config directory.
+        # Point TLS cert + identity key paths to the writable config directory.
         # The default relative paths ("certs/...") resolve inside the PyInstaller
         # temp dir which is read-only.
         certs_dir = self._dir / "certs"

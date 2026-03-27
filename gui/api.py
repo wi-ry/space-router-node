@@ -1,6 +1,7 @@
 """Python API exposed to the webview frontend via pywebview's js_api."""
 
 import logging
+import os
 
 from app.variant import BUILD_VARIANT
 from gui.config_store import ConfigStore
@@ -19,14 +20,24 @@ class Api:
     def needs_onboarding(self) -> bool:
         return self._config.needs_onboarding()
 
-    def save_wallet_and_start(self, address: str, collection_address: str = "") -> dict:
-        """Validate wallet(s), persist, and start the node."""
+    def save_onboarding_and_start(
+        self,
+        passphrase: str = "",
+        staking: str = "",
+        collection: str = "",
+        identity_key_hex: str = "",
+    ) -> dict:
+        """Persist onboarding choices and start the node."""
         try:
-            staking, collection = self._config.save_wallets(address, collection_address)
+            self._config.save_onboarding(
+                passphrase=passphrase,
+                staking=staking,
+                collection=collection,
+                identity_key_hex=identity_key_hex,
+            )
         except ValueError as exc:
             return {"ok": False, "error": str(exc)}
 
-        # Apply config to env so the node picks it up
         self._config.apply_to_env()
 
         try:
@@ -35,7 +46,29 @@ class Api:
             logger.exception("Failed to start node")
             return {"ok": False, "error": f"Failed to start node: {exc}"}
 
-        return {"ok": True, "staking_address": staking, "collection_address": collection}
+        return {"ok": True}
+
+    def unlock_and_start(self, passphrase: str) -> dict:
+        """Set the identity passphrase in env and (re)start the node.
+
+        Called from the passphrase unlock dialog when the node cannot start
+        because the keystore requires a passphrase that is not configured.
+        """
+        os.environ["SR_IDENTITY_PASSPHRASE"] = passphrase
+
+        if self._node.is_running:
+            try:
+                self._node.stop()
+            except Exception as exc:
+                logger.warning("Failed to stop node before unlock restart: %s", exc)
+
+        try:
+            self._node.start()
+        except Exception as exc:
+            logger.exception("Failed to start node after unlock")
+            return {"ok": False, "error": f"Failed to start node: {exc}"}
+
+        return {"ok": True}
 
     def start_node(self) -> dict:
         """Start the node (config must already be set)."""
@@ -92,7 +125,6 @@ class Api:
         """Return current node status for the dashboard."""
         staking = self._config.get("SR_STAKING_ADDRESS")
         collection = self._config.get("SR_COLLECTION_ADDRESS")
-        wallet = self._config.get("SR_WALLET_ADDRESS")
         env = self._config.get_environment()
         api_url = self._config.get("SR_COORDINATION_API_URL")
         ns = self._node.status
@@ -108,9 +140,10 @@ class Api:
             # Backward-compatible fields
             "running": self._node.is_running,
             "phase": self._node.phase,
-            "staking_address": staking or wallet,
-            "collection_address": collection or staking or wallet,
-            "wallet": staking or wallet,
+            "staking_address": staking,
+            "collection_address": collection or staking,
+            "wallet": staking,
+            "staking": staking,
             "error": ns.error_message,
             "environment": env,
             "api_url": api_url,

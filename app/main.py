@@ -11,6 +11,7 @@ Lifecycle phases:
 import asyncio
 import datetime
 import functools
+import getpass
 import logging
 import os
 import signal
@@ -18,10 +19,11 @@ import socket
 import sys
 
 import httpx
+from dotenv import set_key
 
 from app.config import Settings, load_settings
 from app.errors import NodeError, NodeErrorCode, classify_error
-from app.identity import load_or_create_identity
+from app.identity import KeystorePassphraseRequired, load_or_create_identity, write_identity_key
 from app.proxy_handler import handle_client
 from app.registration import (
     check_node_status,
@@ -48,6 +50,136 @@ _HEARTBEAT_INTERVAL = 300  # 5 minutes
 _CERT_CHECK_INTERVAL = 86400  # 24 hours
 _PROBE_REQUEST_INTERVAL = 1800  # 30 minutes
 _HEARTBEAT_FAIL_THRESHOLD = 3
+
+_ENV_FILE = ".env"
+
+
+# ---------------------------------------------------------------------------
+# First-run interactive setup (CLI only)
+# ---------------------------------------------------------------------------
+
+def _prompt(prompt_text: str, default: str = "") -> str:
+    """Prompt the user for input with an optional default."""
+    if default:
+        display = f"{prompt_text} [{default}]: "
+    else:
+        display = f"{prompt_text}: "
+    value = input(display).strip()
+    return value or default
+
+
+def _first_run_setup() -> bool:
+    """Interactive first-time setup wizard.
+
+    Creates the identity key file and writes settings to .env.
+    Returns True on success, False if user cancels (Ctrl+C).
+    """
+    s = load_settings()
+    print()
+    print("─" * 53)
+    print("  SpaceRouter Node — First-Time Setup")
+    print("─" * 53)
+
+    try:
+        # --- Step 1: Identity Key ---
+        print()
+        print("1. Identity Key")
+        generate = _prompt("   Generate a new identity key? [Y/n]", default="Y").lower()
+
+        if generate in ("y", "yes", ""):
+            # Auto-generate — key is created by load_or_create_identity during node start.
+            # We create it now so we can show the address.
+            identity_key_hex = None
+            print("   (Identity key will be generated on first start)")
+            node_address = None
+        else:
+            while True:
+                raw = getpass.getpass("   Enter identity private key (hex): ").strip()
+                try:
+                    from eth_account import Account
+                    account = Account.from_key(raw)
+                    identity_key_hex = account.key.hex()
+                    node_address = account.address.lower()
+                    print(f"   ✓ Identity address: {account.address}")
+                    break
+                except Exception:
+                    print("   Invalid private key — expected 32-byte hex (with or without 0x prefix).")
+
+        # --- Step 2: Identity Passphrase ---
+        print()
+        print("2. Identity Passphrase (optional)")
+        encrypt = _prompt("   Encrypt the identity key with a passphrase? [y/N]", default="N").lower()
+
+        passphrase = ""
+        if encrypt in ("y", "yes"):
+            while True:
+                p1 = getpass.getpass("   Enter passphrase: ")
+                p2 = getpass.getpass("   Confirm passphrase: ")
+                if p1 == p2:
+                    passphrase = p1
+                    break
+                print("   Passphrases do not match — try again.")
+
+        # Write the identity key file now (so we can show the address for steps 3+)
+        key_path = s.IDENTITY_KEY_PATH
+        if identity_key_hex is not None:
+            node_address = write_identity_key(key_path, identity_key_hex, passphrase)
+        else:
+            # Auto-generate now so we can show the address
+            _, node_address = load_or_create_identity(key_path, passphrase)
+            print(f"   ✓ Generated identity address: {node_address}")
+
+        # --- Step 3: Staking Address ---
+        print()
+        print("3. Staking Address (optional)")
+        print(f"   Leave blank to use identity address ({node_address})")
+        while True:
+            raw = _prompt("   Enter staking wallet address", default="")
+            if not raw:
+                staking_address = ""
+                break
+            try:
+                staking_address = validate_wallet_address(raw)
+                break
+            except ValueError as exc:
+                print(f"   Invalid address: {exc}")
+
+        effective_staking = staking_address or node_address
+
+        # --- Step 4: Collection Address ---
+        print()
+        print("4. Collection Address (optional)")
+        print(f"   Leave blank to use staking address ({effective_staking})")
+        while True:
+            raw = _prompt("   Enter collection wallet address", default="")
+            if not raw:
+                collection_address = ""
+                break
+            try:
+                collection_address = validate_wallet_address(raw)
+                break
+            except ValueError as exc:
+                print(f"   Invalid address: {exc}")
+
+        # --- Persist to .env ---
+        if passphrase:
+            set_key(_ENV_FILE, "SR_IDENTITY_PASSPHRASE", passphrase)
+        if staking_address:
+            set_key(_ENV_FILE, "SR_STAKING_ADDRESS", staking_address)
+        if collection_address:
+            set_key(_ENV_FILE, "SR_COLLECTION_ADDRESS", collection_address)
+
+        print()
+        print("─" * 53)
+        print(f"  Configuration saved to {_ENV_FILE}")
+        print("  Starting node...")
+        print("─" * 53)
+        print()
+        return True
+
+    except (KeyboardInterrupt, EOFError):
+        print("\n\nSetup cancelled.")
+        return False
 
 
 # ── Phase functions ──────────────────────────────────────────────────────────
@@ -124,25 +256,28 @@ async def _phase_init(ctx: _NodeContext) -> None:
         ctx.staking_address = staking
         ctx.collection_address = collection
         ctx.wallet_address = staking
-        s.WALLET_ADDRESS = staking
         logger.info("Staking address: %s (v0.2.0)", staking)
         logger.info("Collection address: %s", collection)
     else:
-        if not s.WALLET_ADDRESS:
-            raise NodeError(NodeErrorCode.MISSING_WALLET, "No wallet address configured")
-        try:
-            s.WALLET_ADDRESS = validate_wallet_address(s.WALLET_ADDRESS)
-        except ValueError as exc:
-            raise NodeError(NodeErrorCode.INVALID_WALLET, f"Invalid wallet address: {exc}")
-        ctx.wallet_address = s.WALLET_ADDRESS
-        logger.info("Wallet address: %s (v0.1.2 compat)", ctx.wallet_address)
+        # No staking address configured — identity address will be used as fallback
+        logger.info("No staking address configured — will use identity address as fallback")
 
-    # 4. Identity keypair
+    # 4. Identity keypair (with passphrase support)
     try:
-        ctx.identity_key, ctx.node_address = load_or_create_identity(s.IDENTITY_KEY_PATH)
+        ctx.identity_key, ctx.node_address = load_or_create_identity(
+            s.IDENTITY_KEY_PATH, s.IDENTITY_PASSPHRASE,
+        )
+    except KeystorePassphraseRequired:
+        raise  # Let caller (NodeManager or CLI) handle passphrase prompt
     except Exception as exc:
         raise NodeError(NodeErrorCode.IDENTITY_KEY_ERROR, str(exc))
     logger.info("Node identity: %s", ctx.node_address)
+
+    # Staking address falls back to identity address if not configured
+    if not ctx.staking_address:
+        ctx.staking_address = ctx.node_address
+        ctx.wallet_address = ctx.node_address
+        logger.info("Staking address (identity fallback): %s", ctx.staking_address)
 
     # 5. TLS certificates
     try:
@@ -346,6 +481,8 @@ async def _run(
             _report(NodeState.INITIALIZING, "Loading identity and certificates")
             try:
                 await _phase_init(ctx)
+            except KeystorePassphraseRequired:
+                raise  # Let NodeManager surface this to the frontend
             except NodeError:
                 raise
             except Exception as exc:
@@ -493,6 +630,23 @@ def main() -> None:
     if len(sys.argv) > 1 and sys.argv[1] in ("--version", "-V"):
         print(f"space-router-node {__version__}")
         sys.exit(0)
+
+    # First-run wizard: trigger when identity key file doesn't exist yet,
+    # but only in interactive (TTY) sessions — skip silently in CI/piped mode.
+    s = load_settings()
+    if not os.path.isfile(s.IDENTITY_KEY_PATH) and sys.stdin.isatty():
+        if not _first_run_setup():
+            sys.exit(0)
+        # Reload settings so _run() picks up values written to .env
+        reloaded_settings = load_settings()
+        try:
+            asyncio.run(_run(settings_override=reloaded_settings))
+        finally:
+            if sys.platform == "win32":
+                signal.signal(signal.SIGINT, signal.SIG_DFL)
+                signal.signal(signal.SIGTERM, signal.SIG_DFL)
+        return
+
     try:
         asyncio.run(_run())
     except NodeError as exc:

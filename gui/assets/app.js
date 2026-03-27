@@ -5,6 +5,7 @@
  */
 
 const EVM_RE = /^(0x)?[0-9a-fA-F]{40}$/;
+const HEX_KEY_RE = /^(0x)?[0-9a-fA-F]{64}$/;
 
 const ENV_URLS = {
   "https://spacerouter-coordination-api.fly.dev": "Production",
@@ -154,84 +155,128 @@ async function showNetworkSetup(onComplete) {
 
 // ── Onboarding Screen ──
 
-function validateInputs() {
+function initOnboarding() {
+  const radioGenerate = $("#radio-generate");
+  const radioImport = $("#radio-import");
+  const importSection = $("#import-key-section");
+  const identityKeyInput = $("#identity-key-input");
+  const identityKeyError = $("#identity-key-error");
   const stakingInput = $("#staking-input");
   const stakingError = $("#staking-error");
   const collectionInput = $("#collection-input");
   const collectionError = $("#collection-error");
   const btn = $("#btn-start");
-
-  const stakingVal = stakingInput.value.trim();
-  const collectionVal = collectionInput.value.trim();
-
-  let stakingValid = false;
-  let collectionValid = true; // optional — valid when empty
-
-  // Validate staking (required)
-  if (!stakingVal) {
-    stakingError.textContent = "";
-    stakingInput.classList.remove("invalid");
-  } else if (!EVM_RE.test(stakingVal)) {
-    stakingError.textContent =
-      "Invalid address — expected 0x followed by 40 hex characters";
-    stakingInput.classList.add("invalid");
-  } else {
-    stakingError.textContent = "";
-    stakingInput.classList.remove("invalid");
-    stakingValid = true;
-  }
-
-  // Validate collection (optional)
-  if (!collectionVal) {
-    collectionError.textContent = "";
-    collectionInput.classList.remove("invalid");
-  } else if (!EVM_RE.test(collectionVal)) {
-    collectionError.textContent =
-      "Invalid address — expected 0x followed by 40 hex characters";
-    collectionInput.classList.add("invalid");
-    collectionValid = false;
-  } else {
-    collectionError.textContent = "";
-    collectionInput.classList.remove("invalid");
-  }
-
-  btn.disabled = !(stakingValid && collectionValid);
-}
-
-function initOnboarding() {
-  const stakingInput = $("#staking-input");
-  const collectionInput = $("#collection-input");
-  const stakingError = $("#staking-error");
-  const btn = $("#btn-start");
+  const advancedToggle = $("#advanced-toggle");
+  const advancedSection = $("#advanced-section");
+  const advancedArrow = $("#advanced-arrow");
 
   populateEnvSelector();
 
-  stakingInput.addEventListener("input", validateInputs);
-  collectionInput.addEventListener("input", validateInputs);
+  // ── Identity key mode toggle ──
+  function updateKeyMode() {
+    if (radioImport.checked) {
+      importSection.style.display = "block";
+    } else {
+      importSection.style.display = "none";
+      identityKeyError.textContent = "";
+      identityKeyInput.classList.remove("invalid");
+    }
+    validateForm();
+  }
 
+  radioGenerate.addEventListener("change", updateKeyMode);
+  radioImport.addEventListener("change", updateKeyMode);
+
+  // ── Import key validation ──
+  identityKeyInput.addEventListener("input", function () {
+    const val = identityKeyInput.value.trim();
+    if (!val) {
+      identityKeyError.textContent = "";
+      identityKeyInput.classList.remove("invalid");
+    } else if (!HEX_KEY_RE.test(val)) {
+      identityKeyError.textContent = "Expected 64 hex characters (with or without 0x prefix)";
+      identityKeyInput.classList.add("invalid");
+    } else {
+      identityKeyError.textContent = "";
+      identityKeyInput.classList.remove("invalid");
+    }
+    validateForm();
+  });
+
+  // ── Advanced toggle ──
+  advancedToggle.addEventListener("click", function () {
+    const open = advancedSection.style.display !== "none";
+    advancedSection.style.display = open ? "none" : "block";
+    advancedArrow.textContent = open ? "▸" : "▾";
+  });
+
+  // ── Optional address validation ──
+  function validateAddress(input, errorEl) {
+    const val = input.value.trim();
+    if (!val) {
+      errorEl.textContent = "";
+      input.classList.remove("invalid");
+      return true;
+    }
+    if (!EVM_RE.test(val)) {
+      errorEl.textContent = "Invalid address — expected 0x followed by 40 hex characters";
+      input.classList.add("invalid");
+      return false;
+    }
+    errorEl.textContent = "";
+    input.classList.remove("invalid");
+    return true;
+  }
+
+  stakingInput.addEventListener("input", function () {
+    validateAddress(stakingInput, stakingError);
+    validateForm();
+  });
+  collectionInput.addEventListener("input", function () {
+    validateAddress(collectionInput, collectionError);
+    validateForm();
+  });
+
+  // ── Form-level enable/disable ──
+  function validateForm() {
+    const importValid = radioGenerate.checked ||
+      (radioImport.checked && HEX_KEY_RE.test(identityKeyInput.value.trim()));
+    const stakingValid = validateAddress(stakingInput, stakingError);
+    const collectionValid = validateAddress(collectionInput, collectionError);
+    btn.disabled = !(importValid && stakingValid && collectionValid);
+  }
+
+  // Enable button immediately for generate mode
+  validateForm();
+
+  // ── Submit ──
   btn.addEventListener("click", async function () {
-    const stakingAddr = stakingInput.value.trim();
-    const collectionAddr = collectionInput.value.trim();
-    if (!EVM_RE.test(stakingAddr)) return;
-
     btn.disabled = true;
     btn.textContent = "Starting...";
 
+    const passphrase = $("#passphrase-input").value;
+    const staking = stakingInput.value.trim();
+    const collection = collectionInput.value.trim();
+    const identityKeyHex = radioImport.checked ? identityKeyInput.value.trim() : "";
+
     try {
-      const result = await window.pywebview.api.save_wallet_and_start(
-        stakingAddr,
-        collectionAddr
+      const result = await window.pywebview.api.save_onboarding_and_start(
+        passphrase, staking, collection, identityKeyHex,
       );
       if (result.ok) {
         hideAll();
         showStatus();
       } else {
-        stakingError.textContent = result.error || "Unknown error";
+        // Show error inline
+        const errEl = document.createElement("p");
+        errEl.className = "error";
+        errEl.style.marginTop = "12px";
+        errEl.textContent = result.error || "Unknown error";
+        btn.parentNode.insertBefore(errEl, btn.nextSibling);
         btn.disabled = false;
         btn.textContent = "Start SpaceRouter";
       }
     } catch (e) {
-      stakingError.textContent = "Failed to connect to backend";
       btn.disabled = false;
       btn.textContent = "Start SpaceRouter";
     }
@@ -249,7 +294,6 @@ function showOnboarding() {
 function showStatus() {
   show("screen-status");
   updateStatus();
-  // Poll every 3 seconds
   if (statusPollId) clearInterval(statusPollId);
   statusPollId = setInterval(updateStatus, 3000);
 }
@@ -273,6 +317,12 @@ async function updateStatus() {
     // Wallet addresses
     stakingEl.textContent = status.staking_address || status.wallet || "-";
     collectionEl.textContent = status.collection_address || "-";
+
+    // Check for passphrase-required error
+    if (status.error && status.error.includes("KeystorePassphraseRequired")) {
+      showUnlockDialog();
+      return;
+    }
 
     // Environment badge
     if (status.environment && status.environment !== "production") {
@@ -346,7 +396,7 @@ async function updateStatus() {
     }
 
     // Error display
-    if (status.error && state !== "error_transient") {
+    if (status.error && state !== "error_transient" && !status.error.includes("KeystorePassphraseRequired")) {
       errorText.textContent = status.error;
       errorBanner.style.display = "block";
     } else {
@@ -442,7 +492,6 @@ async function loadSavedAddresses() {
     ) {
       $("#collection-input").value = status.collection_address;
     }
-    validateInputs();
   } catch (e) {}
 }
 
@@ -594,6 +643,52 @@ function updateTestBannerLabel(url) {
   if (!label) return;
   const envName = ENV_URLS[url];
   label.textContent = envName ? "— " + envName : "— Custom";
+}
+
+// ── Passphrase Unlock Dialog ──
+
+function showUnlockDialog() {
+  show("dialog-overlay");
+  if (statusPollId) {
+    clearInterval(statusPollId);
+    statusPollId = null;
+  }
+
+  const btn = $("#btn-unlock");
+  const input = $("#unlock-passphrase");
+  const errEl = $("#unlock-error");
+
+  // Prevent duplicate listeners
+  const newBtn = btn.cloneNode(true);
+  btn.parentNode.replaceChild(newBtn, btn);
+
+  newBtn.addEventListener("click", async function () {
+    const passphrase = input.value;
+    if (!passphrase) {
+      errEl.textContent = "Passphrase is required";
+      return;
+    }
+    newBtn.disabled = true;
+    newBtn.textContent = "Unlocking...";
+    errEl.textContent = "";
+
+    try {
+      const result = await window.pywebview.api.unlock_and_start(passphrase);
+      if (result.ok) {
+        hide("dialog-overlay");
+        input.value = "";
+        showStatus();
+      } else {
+        errEl.textContent = result.error || "Incorrect passphrase";
+        newBtn.disabled = false;
+        newBtn.textContent = "Unlock";
+      }
+    } catch (e) {
+      errEl.textContent = "Failed to connect to backend";
+      newBtn.disabled = false;
+      newBtn.textContent = "Unlock";
+    }
+  });
 }
 
 // ── Initialisation ──

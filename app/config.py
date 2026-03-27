@@ -1,13 +1,18 @@
 import logging
 import warnings
 
+from pydantic import AliasChoices, Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 logger = logging.getLogger(__name__)
 
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_prefix="SR_", env_file=".env")
+    model_config = SettingsConfigDict(
+        env_prefix="SR_",
+        env_file=".env",
+        populate_by_name=True,
+    )
 
     NODE_PORT: int = 9090
     COORDINATION_API_URL: str = "http://localhost:8000"
@@ -22,13 +27,18 @@ class Settings(BaseSettings):
 
     PUBLIC_IP: str = ""  # Auto-detected if empty
     PUBLIC_PORT: int = 0  # Override advertised port (0 = use NODE_PORT)
-    WALLET_ADDRESS: str = ""  # Required — user-provided EVM address
 
-    # v0.2.0 multi-wallet: separate staking and collection addresses.
-    # When set, the node uses the v0.2.0 registration protocol.
-    # When empty, falls back to WALLET_ADDRESS (v0.1.2 compat).
-    STAKING_ADDRESS: str = ""
-    COLLECTION_ADDRESS: str = ""  # Defaults to STAKING_ADDRESS if empty
+    # Wallet addresses
+    # AliasChoices: accept SR_WALLET_ADDRESS (v0.1.2 name) as well as SR_STAKING_ADDRESS.
+    # populate_by_name=True lets tests still pass STAKING_ADDRESS= as a kwarg.
+    STAKING_ADDRESS: str = Field(
+        default="",
+        validation_alias=AliasChoices("SR_STAKING_ADDRESS", "SR_WALLET_ADDRESS"),
+    )
+    COLLECTION_ADDRESS: str = ""    # Collection wallet; if empty, falls back to staking address
+
+    # v0.2.0 registration mode
+    REGISTRATION_MODE: str = "v1"   # "v1" (v0.1.2) | "v2" (v0.2.0) | "auto"
 
     # UPnP / NAT-PMP automatic port forwarding
     UPNP_ENABLED: bool = True
@@ -45,6 +55,7 @@ class Settings(BaseSettings):
 
     # Node identity keypair (auto-generated secp256k1 for signing API requests)
     IDENTITY_KEY_PATH: str = "certs/node-identity.key"
+    IDENTITY_PASSPHRASE: str = ""   # If set, encrypt identity key with Web3 keystore JSON
 
     # TLS — auto-generates a self-signed cert if files don't exist
     TLS_CERT_PATH: str = "certs/node.crt"
@@ -53,6 +64,14 @@ class Settings(BaseSettings):
     # mTLS — Gateway authentication (requires gateway_ca_cert from registration)
     MTLS_ENABLED: bool = True
     GATEWAY_CA_CERT_PATH: str = "certs/gateway-ca.crt"
+
+    @field_validator("REGISTRATION_MODE")
+    @classmethod
+    def _validate_registration_mode(cls, v: str) -> str:
+        allowed = ("v1", "v2", "auto")
+        if v not in allowed:
+            raise ValueError(f"REGISTRATION_MODE must be one of {allowed}, got {v!r}")
+        return v
 
 
 def load_settings() -> Settings:
