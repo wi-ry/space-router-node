@@ -118,6 +118,18 @@ def classify_error(exc: Exception) -> NodeError:
                 f"HTTP {status}",
                 cause=exc,
             )
+        if status in (429, 408):
+            return NodeError(
+                NodeErrorCode.NETWORK_UNREACHABLE,
+                f"HTTP {status}: transient",
+                cause=exc,
+            )
+        # Catch-all for any other unhandled HTTP status
+        return NodeError(
+            NodeErrorCode.REGISTRATION_REJECTED,
+            f"HTTP {status}: {exc.response.text[:200]}",
+            cause=exc,
+        )
 
     if isinstance(exc, (httpx.ConnectError, httpx.ConnectTimeout)):
         return NodeError(NodeErrorCode.NETWORK_UNREACHABLE, str(exc), cause=exc)

@@ -553,10 +553,12 @@ async def _run(
             health_task = asyncio.create_task(_health_loop(ctx, sm, stop_event))
 
             # Wait for stop or health loop exit (reconnection trigger)
-            done, _ = await asyncio.wait(
+            done, pending = await asyncio.wait(
                 [asyncio.create_task(stop_event.wait()), health_task],
                 return_when=asyncio.FIRST_COMPLETED,
             )
+            for task in pending:
+                task.cancel()
 
             # If health loop exited (RECONNECTING), handle reconnection
             if sm.state == NodeState.RECONNECTING:
@@ -569,14 +571,22 @@ async def _run(
                     try:
                         await _phase_register(ctx)
                         sm.set_node_id(ctx.node_id)
+                        # Rebind server with mTLS if applicable
+                        if ctx.s.MTLS_ENABLED and os.path.isfile(ctx.s.GATEWAY_CA_CERT_PATH):
+                            try:
+                                await _rebind_server_mtls(ctx)
+                            except Exception:
+                                logger.warning("mTLS server rebind failed", exc_info=True)
                         _report(NodeState.RUNNING, f"Reconnected (Node ID: {ctx.node_id[:12]}...)")
                         logger.info("Reconnected successfully")
                         # Restart health loop
                         health_task = asyncio.create_task(_health_loop(ctx, sm, stop_event))
-                        done, _ = await asyncio.wait(
+                        done, pending = await asyncio.wait(
                             [asyncio.create_task(stop_event.wait()), health_task],
                             return_when=asyncio.FIRST_COMPLETED,
                         )
+                        for task in pending:
+                            task.cancel()
                     except Exception as exc:
                         error = classify_error(exc) if not isinstance(exc, NodeError) else exc
                         delay = sm.handle_error(error, NodeState.RECONNECTING)

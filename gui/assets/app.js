@@ -85,6 +85,12 @@ function envLabel(envKey) {
 // ── Network Setup Screen ──
 
 function initNetworkSetup(onComplete) {
+  // Strip old listeners by replacing elements
+  for (const sel of ["#btn-network-continue"]) {
+    const el = $(sel);
+    el.replaceWith(el.cloneNode(true));
+  }
+
   const radios = document.querySelectorAll('input[name="network-mode"]');
   const tunnelConfig = $("#tunnel-config");
   const tunnelHost = $("#tunnel-host");
@@ -156,6 +162,12 @@ async function showNetworkSetup(onComplete) {
 // ── Onboarding Screen ──
 
 function initOnboarding() {
+  // Strip old listeners by replacing elements
+  for (const sel of ["#btn-start"]) {
+    const el = $(sel);
+    el.replaceWith(el.cloneNode(true));
+  }
+
   const radioGenerate = $("#radio-generate");
   const radioImport = $("#radio-import");
   const importSection = $("#import-key-section");
