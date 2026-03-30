@@ -385,7 +385,7 @@ class TestRegisterNodeV2:
     @pytest.mark.asyncio
     @respx.mock
     async def test_v2_register_sends_multi_wallet_payload(self, v2_settings):
-        """v2 payload must include identity, staking, collection, and vouching."""
+        """v2 payload must include staking, collection, vouching, and identity sig."""
         _mock_request_probe()
         respx.post("http://coordination:8000/nodes/register").mock(
             return_value=Response(200, json=_v2_register_response())
@@ -398,12 +398,12 @@ class TestRegisterNodeV2:
                 identity_key=TEST_IDENTITY_KEY,
                 identity_address=TEST_NODE_ADDRESS,
                 wallet_address=TEST_WALLET,
+                staking_address=TEST_WALLET,
             )
 
         assert node_id == "node-v2-123"
 
         body = json.loads(respx.calls[0].request.content)
-        assert body["identity_address"] == TEST_NODE_ADDRESS
         assert "staking_address" in body
         assert "collection_address" in body
         assert "staking_vouching_signature" in body
@@ -411,13 +411,14 @@ class TestRegisterNodeV2:
         assert "timestamp" in body
         assert body.get("label") == "test-node"
 
-        # v1 fields must NOT be in v2 payload
+        # v1-only and old v2 fields must NOT be in payload
         assert "wallet_address" not in body
+        assert "identity_address" not in body
 
     @pytest.mark.asyncio
     @respx.mock
     async def test_v2_register_wallet_collapsing(self, v2_settings):
-        """When COLLECTION_ADDRESS empty, it defaults to wallet_address (staking address)."""
+        """When collection_address empty, it defaults to staking_address."""
         _mock_request_probe()
         respx.post("http://coordination:8000/nodes/register").mock(
             return_value=Response(200, json=_v2_register_response())
@@ -430,10 +431,11 @@ class TestRegisterNodeV2:
                 identity_key=TEST_IDENTITY_KEY,
                 identity_address=TEST_NODE_ADDRESS,
                 wallet_address=TEST_WALLET,
+                staking_address=TEST_WALLET,
             )
 
         body = json.loads(respx.calls[0].request.content)
-        # With empty COLLECTION_ADDRESS, it falls back to wallet_address (= staking address)
+        # With empty collection_address, it falls back to staking_address
         assert body["staking_address"] == TEST_WALLET
         assert body["collection_address"] == TEST_WALLET
 
@@ -456,6 +458,8 @@ class TestRegisterNodeV2:
                 identity_key=TEST_IDENTITY_KEY,
                 identity_address=TEST_NODE_ADDRESS,
                 wallet_address=TEST_STAKING_ADDRESS,
+                staking_address=TEST_STAKING_ADDRESS,
+                collection_address=TEST_COLLECTION_ADDRESS,
             )
 
         body = json.loads(respx.calls[0].request.content)
@@ -464,8 +468,8 @@ class TestRegisterNodeV2:
 
     @pytest.mark.asyncio
     @respx.mock
-    async def test_v2_register_normalizes_checksummed_addresses(self):
-        """EIP-55 checksummed (mixed-case) addresses must be lowercased."""
+    async def test_v2_register_passes_addresses_through(self):
+        """Addresses are passed through to the payload as provided."""
         checksummed_staking = "0xAbCdEf1111111111111111111111111111111111"
         checksummed_collection = "0x2222222222222222222222222222222222AbCdEf"
         settings = Settings(
@@ -480,8 +484,8 @@ class TestRegisterNodeV2:
         _mock_request_probe()
         respx.post("http://coordination:8000/nodes/register").mock(
             return_value=Response(200, json=_v2_register_response(
-                staking_address=checksummed_staking.lower(),
-                collection_address=checksummed_collection.lower(),
+                staking_address=checksummed_staking,
+                collection_address=checksummed_collection,
             ))
         )
 
@@ -492,11 +496,13 @@ class TestRegisterNodeV2:
                 identity_key=TEST_IDENTITY_KEY,
                 identity_address=TEST_NODE_ADDRESS,
                 wallet_address=checksummed_staking,
+                staking_address=checksummed_staking,
+                collection_address=checksummed_collection,
             )
 
         body = json.loads(respx.calls[0].request.content)
-        assert body["staking_address"] == checksummed_staking.lower()
-        assert body["collection_address"] == checksummed_collection.lower()
+        assert body["staking_address"] == checksummed_staking
+        assert body["collection_address"] == checksummed_collection
 
     @pytest.mark.asyncio
     @respx.mock
@@ -514,6 +520,8 @@ class TestRegisterNodeV2:
                 identity_key=TEST_IDENTITY_KEY,
                 identity_address=TEST_NODE_ADDRESS,
                 wallet_address=TEST_STAKING_ADDRESS,
+                staking_address=TEST_STAKING_ADDRESS,
+                collection_address=TEST_COLLECTION_ADDRESS,
             )
 
         body = json.loads(respx.calls[0].request.content)
@@ -545,6 +553,7 @@ class TestRegisterNodeV2:
                 identity_key=TEST_IDENTITY_KEY,
                 identity_address=TEST_NODE_ADDRESS,
                 wallet_address=TEST_WALLET,
+                staking_address=TEST_WALLET,
             )
 
         assert node_id == "node-v2-mtls"
@@ -565,6 +574,7 @@ class TestRegisterNodeV2:
                     identity_key=TEST_IDENTITY_KEY,
                     identity_address=TEST_NODE_ADDRESS,
                     wallet_address=TEST_WALLET,
+                    staking_address=TEST_WALLET,
                 )
 
 
@@ -573,12 +583,12 @@ class TestRegisterNodeV2:
 # ---------------------------------------------------------------------------
 
 class TestAutoModeRegistration:
-    """Tests for auto-mode: try v2 first, fall back to v1 on 400/422."""
+    """Tests for auto-mode: single call, format determined by input data."""
 
     @pytest.mark.asyncio
     @respx.mock
     async def test_auto_v2_succeeds(self, auto_settings):
-        """When v2 succeeds, no fallback needed."""
+        """When staking_address is provided, auto mode sends v2 format."""
         _mock_request_probe()
         respx.post("http://coordination:8000/nodes/register").mock(
             return_value=Response(200, json=_v2_register_response(node_id="node-auto-v2"))
@@ -591,30 +601,23 @@ class TestAutoModeRegistration:
                 identity_key=TEST_IDENTITY_KEY,
                 identity_address=TEST_NODE_ADDRESS,
                 wallet_address=TEST_WALLET,
+                staking_address=TEST_WALLET,
             )
 
         assert node_id == "node-auto-v2"
-        # Only one registration call (v2 succeeded)
+        # Single registration call
         reg_calls = [c for c in respx.calls if "/nodes/register" in str(c.request.url)
                      and "/request-probe" not in str(c.request.url)]
         assert len(reg_calls) == 1
 
     @pytest.mark.asyncio
     @respx.mock
-    async def test_auto_falls_back_to_v1_on_400(self, auto_settings):
-        """400 from v2 should trigger v1 fallback."""
+    async def test_auto_uses_v1_when_no_staking_address(self, auto_settings):
+        """When staking_address is empty, auto mode sends v1 format."""
         _mock_request_probe()
-        # Use a side_effect to return 400 first (v2), then 200 (v1)
-        call_count = {"n": 0}
-        original_route = respx.post("http://coordination:8000/nodes/register")
-
-        def _side_effect(request):
-            call_count["n"] += 1
-            if call_count["n"] == 1:
-                return Response(400, json={"detail": "Unknown fields"})
-            return Response(200, json=_v1_register_response(node_id="node-auto-v1"))
-
-        original_route.mock(side_effect=_side_effect)
+        respx.post("http://coordination:8000/nodes/register").mock(
+            return_value=Response(200, json=_v1_register_response(node_id="node-auto-v1"))
+        )
 
         import httpx
         async with httpx.AsyncClient() as client:
@@ -623,44 +626,22 @@ class TestAutoModeRegistration:
                 identity_key=TEST_IDENTITY_KEY,
                 identity_address=TEST_NODE_ADDRESS,
                 wallet_address=TEST_WALLET,
+                staking_address="",
             )
 
         assert node_id == "node-auto-v1"
-        # Two registration calls: v2 (400) then v1 (200)
+        # Single registration call with v1 payload
         reg_calls = [c for c in respx.calls if "/nodes/register" in str(c.request.url)
                      and "/request-probe" not in str(c.request.url)]
-        assert len(reg_calls) == 2
-
-    @pytest.mark.asyncio
-    @respx.mock
-    async def test_auto_falls_back_to_v1_on_422(self, auto_settings):
-        """422 from v2 should also trigger v1 fallback."""
-        _mock_request_probe()
-        call_count = {"n": 0}
-
-        def _side_effect(request):
-            call_count["n"] += 1
-            if call_count["n"] == 1:
-                return Response(422, json={"detail": "Unprocessable"})
-            return Response(200, json=_v1_register_response(node_id="node-fallback-422"))
-
-        respx.post("http://coordination:8000/nodes/register").mock(side_effect=_side_effect)
-
-        import httpx
-        async with httpx.AsyncClient() as client:
-            node_id, _ = await register_node(
-                client, auto_settings, "1.2.3.4",
-                identity_key=TEST_IDENTITY_KEY,
-                identity_address=TEST_NODE_ADDRESS,
-                wallet_address=TEST_WALLET,
-            )
-
-        assert node_id == "node-fallback-422"
+        assert len(reg_calls) == 1
+        body = json.loads(reg_calls[0].request.content)
+        assert "wallet_address" in body
+        assert "staking_address" not in body
 
     @pytest.mark.asyncio
     @respx.mock
     async def test_auto_does_not_fallback_on_500(self, auto_settings):
-        """500 from v2 should NOT trigger fallback — it propagates."""
+        """500 should propagate — no fallback in auto mode."""
         respx.post("http://coordination:8000/nodes/register").mock(
             return_value=Response(500, text="Internal Server Error")
         )
@@ -673,6 +654,7 @@ class TestAutoModeRegistration:
                     identity_key=TEST_IDENTITY_KEY,
                     identity_address=TEST_NODE_ADDRESS,
                     wallet_address=TEST_WALLET,
+                    staking_address=TEST_WALLET,
                 )
         assert exc_info.value.response.status_code == 500
 
@@ -784,11 +766,13 @@ class TestSignatureMessageFormats:
 
     @pytest.mark.asyncio
     @respx.mock
-    async def test_v2_signature_signs_over_identity_address(self, v2_settings):
-        """v2 identity_signature message: space-router:register:{identity_address}:{ts}."""
+    async def test_v2_signature_signs_over_staking_address(self, v2_settings):
+        """v2 identity_signature message: space-router:register:{staking_address}:{ts}."""
         _mock_request_probe()
         respx.post("http://coordination:8000/nodes/register").mock(
-            return_value=Response(200, json=_v2_register_response())
+            return_value=Response(200, json=_v2_register_response(
+                staking_address=TEST_STAKING_ADDRESS,
+            ))
         )
 
         import httpx
@@ -798,13 +782,14 @@ class TestSignatureMessageFormats:
                 identity_key=TEST_IDENTITY_KEY,
                 identity_address=TEST_NODE_ADDRESS,
                 wallet_address=TEST_WALLET,
+                staking_address=TEST_STAKING_ADDRESS,
             )
 
         body = json.loads(respx.calls[0].request.content)
         sig = body["identity_signature"]
         ts = body["timestamp"]
 
-        message_text = f"space-router:register:{TEST_NODE_ADDRESS}:{ts}"
+        message_text = f"space-router:register:{TEST_STAKING_ADDRESS}:{ts}"
         message = encode_defunct(text=message_text)
         recovered = _w3.eth.account.recover_message(message, signature=sig)
         assert recovered.lower() == TEST_NODE_ADDRESS
@@ -812,7 +797,7 @@ class TestSignatureMessageFormats:
     @pytest.mark.asyncio
     @respx.mock
     async def test_v1_and_v2_signatures_differ(self, reg_settings, v2_settings):
-        """v1 and v2 produce different identity_signatures (different message targets)."""
+        """v1 and v2 produce different identity_signatures when targets differ."""
         _mock_request_probe()
         respx.post("http://coordination:8000/nodes/register").mock(
             return_value=Response(200, json=_v1_register_response())
@@ -833,7 +818,9 @@ class TestSignatureMessageFormats:
         respx.reset()
         _mock_request_probe()
         respx.post("http://coordination:8000/nodes/register").mock(
-            return_value=Response(200, json=_v2_register_response())
+            return_value=Response(200, json=_v2_register_response(
+                staking_address=TEST_STAKING_ADDRESS,
+            ))
         )
 
         async with httpx.AsyncClient() as client:
@@ -842,13 +829,13 @@ class TestSignatureMessageFormats:
                 identity_key=TEST_IDENTITY_KEY,
                 identity_address=TEST_NODE_ADDRESS,
                 wallet_address=TEST_WALLET,
+                staking_address=TEST_STAKING_ADDRESS,
             )
 
         v2_body = json.loads(respx.calls[0].request.content)
 
-        # Signatures differ because target differs (wallet_address vs identity_address)
-        # unless wallet_address == identity_address, which is unlikely in test data
-        assert TEST_WALLET != TEST_NODE_ADDRESS, "test precondition: wallet != identity"
+        # Signatures differ because target differs (wallet_address vs staking_address)
+        assert TEST_WALLET != TEST_STAKING_ADDRESS, "test precondition: wallet != staking"
         assert v1_body["identity_signature"] != v2_body["identity_signature"]
 
 
@@ -861,8 +848,8 @@ class TestAutoModePayloads:
 
     @pytest.mark.asyncio
     @respx.mock
-    async def test_auto_first_attempt_uses_v2_payload(self, auto_settings):
-        """The first call in auto mode must use v2 payload format."""
+    async def test_auto_with_staking_uses_v2_payload(self, auto_settings):
+        """When staking_address is provided, auto mode sends v2 payload."""
         _mock_request_probe()
         respx.post("http://coordination:8000/nodes/register").mock(
             return_value=Response(200, json=_v2_register_response())
@@ -875,55 +862,19 @@ class TestAutoModePayloads:
                 identity_key=TEST_IDENTITY_KEY,
                 identity_address=TEST_NODE_ADDRESS,
                 wallet_address=TEST_WALLET,
+                staking_address=TEST_WALLET,
             )
 
         body = json.loads(respx.calls[0].request.content)
-        assert "identity_address" in body
+        assert "staking_address" in body
         assert "staking_vouching_signature" in body
         assert "wallet_address" not in body
+        assert "identity_address" not in body
 
     @pytest.mark.asyncio
     @respx.mock
-    async def test_auto_fallback_second_call_uses_v1_payload(self, auto_settings):
-        """When auto falls back, the second call must use v1 payload format."""
-        _mock_request_probe()
-        call_count = {"n": 0}
-
-        def _side_effect(request):
-            call_count["n"] += 1
-            if call_count["n"] == 1:
-                return Response(400, json={"detail": "Unknown fields"})
-            return Response(200, json=_v1_register_response())
-
-        respx.post("http://coordination:8000/nodes/register").mock(side_effect=_side_effect)
-
-        import httpx
-        async with httpx.AsyncClient() as client:
-            await register_node(
-                client, auto_settings, "1.2.3.4",
-                identity_key=TEST_IDENTITY_KEY,
-                identity_address=TEST_NODE_ADDRESS,
-                wallet_address=TEST_WALLET,
-            )
-
-        reg_calls = [c for c in respx.calls if "/nodes/register" in str(c.request.url)
-                     and "/request-probe" not in str(c.request.url)]
-        assert len(reg_calls) == 2
-
-        # First call: v2 payload
-        first_body = json.loads(reg_calls[0].request.content)
-        assert "identity_address" in first_body
-        assert "wallet_address" not in first_body
-
-        # Second call: v1 payload
-        second_body = json.loads(reg_calls[1].request.content)
-        assert "wallet_address" in second_body
-        assert "identity_address" not in second_body
-
-    @pytest.mark.asyncio
-    @respx.mock
-    async def test_auto_does_not_fallback_on_403(self, auto_settings):
-        """403 (insufficient stake) should NOT trigger fallback."""
+    async def test_auto_error_propagates_on_403(self, auto_settings):
+        """403 (insufficient stake) should propagate — single call, no fallback."""
         respx.post("http://coordination:8000/nodes/register").mock(
             return_value=Response(403, json={"detail": "Insufficient stake"})
         )
@@ -936,13 +887,14 @@ class TestAutoModePayloads:
                     identity_key=TEST_IDENTITY_KEY,
                     identity_address=TEST_NODE_ADDRESS,
                     wallet_address=TEST_WALLET,
+                    staking_address=TEST_WALLET,
                 )
         assert exc_info.value.response.status_code == 403
 
     @pytest.mark.asyncio
     @respx.mock
-    async def test_auto_does_not_fallback_on_409(self, auto_settings):
-        """409 (duplicate wallet) should NOT trigger fallback."""
+    async def test_auto_error_propagates_on_409(self, auto_settings):
+        """409 (duplicate wallet) should propagate — single call, no fallback."""
         respx.post("http://coordination:8000/nodes/register").mock(
             return_value=Response(409, json={"detail": "Wallet already registered"})
         )
@@ -955,6 +907,7 @@ class TestAutoModePayloads:
                     identity_key=TEST_IDENTITY_KEY,
                     identity_address=TEST_NODE_ADDRESS,
                     wallet_address=TEST_WALLET,
+                    staking_address=TEST_WALLET,
                 )
         assert exc_info.value.response.status_code == 409
 
@@ -1000,6 +953,7 @@ class TestActiveModeTracking:
                 identity_key=TEST_IDENTITY_KEY,
                 identity_address=TEST_NODE_ADDRESS,
                 wallet_address=TEST_WALLET,
+                staking_address=TEST_WALLET,
             )
 
         assert registration_mod._active_mode == "v2"
@@ -1019,23 +973,19 @@ class TestActiveModeTracking:
                 identity_key=TEST_IDENTITY_KEY,
                 identity_address=TEST_NODE_ADDRESS,
                 wallet_address=TEST_WALLET,
+                staking_address=TEST_WALLET,
             )
 
         assert registration_mod._active_mode == "v2"
 
     @pytest.mark.asyncio
     @respx.mock
-    async def test_auto_fallback_sets_v1(self, auto_settings):
+    async def test_auto_without_staking_sets_v1(self, auto_settings):
+        """Auto mode without staking_address sets _active_mode to v1."""
         _mock_request_probe()
-        call_count = {"n": 0}
-
-        def _side_effect(request):
-            call_count["n"] += 1
-            if call_count["n"] == 1:
-                return Response(400, json={"detail": "Unknown"})
-            return Response(200, json=_v1_register_response())
-
-        respx.post("http://coordination:8000/nodes/register").mock(side_effect=_side_effect)
+        respx.post("http://coordination:8000/nodes/register").mock(
+            return_value=Response(200, json=_v1_register_response())
+        )
 
         import httpx
         async with httpx.AsyncClient() as client:
@@ -1044,6 +994,7 @@ class TestActiveModeTracking:
                 identity_key=TEST_IDENTITY_KEY,
                 identity_address=TEST_NODE_ADDRESS,
                 wallet_address=TEST_WALLET,
+                staking_address="",
             )
 
         assert registration_mod._active_mode == "v1"
@@ -1054,9 +1005,9 @@ class TestActiveModeTracking:
 # ---------------------------------------------------------------------------
 
 class TestRegistrationModeConfig:
-    def test_default_mode_is_v1(self):
+    def test_default_mode_is_auto(self):
         s = Settings(STAKING_ADDRESS=TEST_WALLET)
-        assert s.REGISTRATION_MODE == "v1"
+        assert s.REGISTRATION_MODE == "auto"
 
     def test_valid_modes_accepted(self):
         for mode in ("v1", "v2", "auto"):
@@ -1096,11 +1047,12 @@ class TestV2EdgeCases:
                 identity_key=TEST_IDENTITY_KEY,
                 identity_address=TEST_NODE_ADDRESS,
                 wallet_address=TEST_WALLET,
+                staking_address=TEST_WALLET,
             )
 
         body = json.loads(respx.calls[0].request.content)
         assert body["endpoint_url"] == "https://203.0.113.5:9090"
-        assert "identity_address" in body
+        assert "staking_address" in body
 
     @pytest.mark.asyncio
     @respx.mock
@@ -1125,6 +1077,7 @@ class TestV2EdgeCases:
                 identity_key=TEST_IDENTITY_KEY,
                 identity_address=TEST_NODE_ADDRESS,
                 wallet_address=TEST_WALLET,
+                staking_address=TEST_WALLET,
             )
 
         body = json.loads(respx.calls[0].request.content)
