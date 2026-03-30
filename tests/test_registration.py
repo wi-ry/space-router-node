@@ -220,7 +220,7 @@ class TestRegisterNode:
             node_id, gateway_ca_cert = await register_node(
                 client, reg_settings, "1.2.3.4",
                 identity_key=TEST_IDENTITY_KEY,
-                identity_address=TEST_NODE_ADDRESS,
+
                 wallet_address=TEST_WALLET,
             )
 
@@ -253,7 +253,7 @@ class TestRegisterNode:
                 client, reg_settings, "1.2.3.4",
                 upnp_endpoint=("203.0.113.5", 9090),
                 identity_key=TEST_IDENTITY_KEY,
-                identity_address=TEST_NODE_ADDRESS,
+
                 wallet_address=TEST_WALLET,
             )
 
@@ -278,7 +278,7 @@ class TestRegisterNode:
             node_id, gateway_ca_cert = await register_node(
                 client, reg_settings, "1.2.3.4",
                 identity_key=TEST_IDENTITY_KEY,
-                identity_address=TEST_NODE_ADDRESS,
+
                 wallet_address=TEST_WALLET,
             )
 
@@ -299,7 +299,7 @@ class TestRegisterNode:
             node_id, _ = await register_node(
                 client, reg_settings, "1.2.3.4",
                 identity_key=TEST_IDENTITY_KEY,
-                identity_address=TEST_NODE_ADDRESS,
+
                 wallet_address="0x2c7536E3605D9C16a7a3D7b1898e529396a65c23",
             )
 
@@ -321,7 +321,7 @@ class TestRegisterNode:
             await register_node(
                 client, reg_settings, "1.2.3.4",
                 identity_key=TEST_IDENTITY_KEY,
-                identity_address=TEST_NODE_ADDRESS,
+
                 wallet_address=TEST_WALLET,
             )
 
@@ -346,7 +346,7 @@ class TestRegisterNode:
                 await register_node(
                     client, reg_settings, "1.2.3.4",
                     identity_key=TEST_IDENTITY_KEY,
-                    identity_address=TEST_NODE_ADDRESS,
+    
                     wallet_address=TEST_WALLET,
                 )
 
@@ -367,7 +367,7 @@ class TestRegisterNode:
             node_id, gateway_ca_cert = await register_node(
                 client, reg_settings, "1.2.3.4",
                 identity_key=TEST_IDENTITY_KEY,
-                identity_address=TEST_NODE_ADDRESS,
+
                 wallet_address=TEST_WALLET,
             )
 
@@ -396,7 +396,7 @@ class TestRegisterNodeV2:
             node_id, _ = await register_node(
                 client, v2_settings, "1.2.3.4",
                 identity_key=TEST_IDENTITY_KEY,
-                identity_address=TEST_NODE_ADDRESS,
+
                 wallet_address=TEST_WALLET,
                 staking_address=TEST_WALLET,
             )
@@ -429,7 +429,7 @@ class TestRegisterNodeV2:
             await register_node(
                 client, v2_settings, "1.2.3.4",
                 identity_key=TEST_IDENTITY_KEY,
-                identity_address=TEST_NODE_ADDRESS,
+
                 wallet_address=TEST_WALLET,
                 staking_address=TEST_WALLET,
             )
@@ -456,7 +456,7 @@ class TestRegisterNodeV2:
             await register_node(
                 client, v2_multi_wallet_settings, "1.2.3.4",
                 identity_key=TEST_IDENTITY_KEY,
-                identity_address=TEST_NODE_ADDRESS,
+
                 wallet_address=TEST_STAKING_ADDRESS,
                 staking_address=TEST_STAKING_ADDRESS,
                 collection_address=TEST_COLLECTION_ADDRESS,
@@ -494,7 +494,7 @@ class TestRegisterNodeV2:
             await register_node(
                 client, settings, "1.2.3.4",
                 identity_key=TEST_IDENTITY_KEY,
-                identity_address=TEST_NODE_ADDRESS,
+
                 wallet_address=checksummed_staking,
                 staking_address=checksummed_staking,
                 collection_address=checksummed_collection,
@@ -518,7 +518,7 @@ class TestRegisterNodeV2:
             await register_node(
                 client, v2_multi_wallet_settings, "1.2.3.4",
                 identity_key=TEST_IDENTITY_KEY,
-                identity_address=TEST_NODE_ADDRESS,
+
                 wallet_address=TEST_STAKING_ADDRESS,
                 staking_address=TEST_STAKING_ADDRESS,
                 collection_address=TEST_COLLECTION_ADDRESS,
@@ -551,7 +551,7 @@ class TestRegisterNodeV2:
             node_id, gateway_ca_cert = await register_node(
                 client, v2_settings, "1.2.3.4",
                 identity_key=TEST_IDENTITY_KEY,
-                identity_address=TEST_NODE_ADDRESS,
+
                 wallet_address=TEST_WALLET,
                 staking_address=TEST_WALLET,
             )
@@ -572,7 +572,7 @@ class TestRegisterNodeV2:
                 await register_node(
                     client, v2_settings, "1.2.3.4",
                     identity_key=TEST_IDENTITY_KEY,
-                    identity_address=TEST_NODE_ADDRESS,
+    
                     wallet_address=TEST_WALLET,
                     staking_address=TEST_WALLET,
                 )
@@ -599,7 +599,7 @@ class TestAutoModeRegistration:
             node_id, _ = await register_node(
                 client, auto_settings, "1.2.3.4",
                 identity_key=TEST_IDENTITY_KEY,
-                identity_address=TEST_NODE_ADDRESS,
+
                 wallet_address=TEST_WALLET,
                 staking_address=TEST_WALLET,
             )
@@ -624,7 +624,7 @@ class TestAutoModeRegistration:
             node_id, _ = await register_node(
                 client, auto_settings, "1.2.3.4",
                 identity_key=TEST_IDENTITY_KEY,
-                identity_address=TEST_NODE_ADDRESS,
+
                 wallet_address=TEST_WALLET,
                 staking_address="",
             )
@@ -652,7 +652,7 @@ class TestAutoModeRegistration:
                 await register_node(
                     client, auto_settings, "1.2.3.4",
                     identity_key=TEST_IDENTITY_KEY,
-                    identity_address=TEST_NODE_ADDRESS,
+    
                     wallet_address=TEST_WALLET,
                     staking_address=TEST_WALLET,
                 )
@@ -694,7 +694,7 @@ class TestV1PayloadIsolation:
             await register_node(
                 client, reg_settings, "1.2.3.4",
                 identity_key=TEST_IDENTITY_KEY,
-                identity_address=TEST_NODE_ADDRESS,
+
                 wallet_address=TEST_WALLET,
             )
 
@@ -720,7 +720,7 @@ class TestV1PayloadIsolation:
             await register_node(
                 client, v1_with_v2_config, "1.2.3.4",
                 identity_key=TEST_IDENTITY_KEY,
-                identity_address=TEST_NODE_ADDRESS,
+
                 wallet_address=TEST_WALLET,
             )
 
@@ -751,7 +751,7 @@ class TestSignatureMessageFormats:
             await register_node(
                 client, reg_settings, "1.2.3.4",
                 identity_key=TEST_IDENTITY_KEY,
-                identity_address=TEST_NODE_ADDRESS,
+
                 wallet_address=TEST_WALLET,
             )
 
@@ -780,7 +780,7 @@ class TestSignatureMessageFormats:
             await register_node(
                 client, v2_settings, "1.2.3.4",
                 identity_key=TEST_IDENTITY_KEY,
-                identity_address=TEST_NODE_ADDRESS,
+
                 wallet_address=TEST_WALLET,
                 staking_address=TEST_STAKING_ADDRESS,
             )
@@ -808,7 +808,7 @@ class TestSignatureMessageFormats:
             await register_node(
                 client, reg_settings, "1.2.3.4",
                 identity_key=TEST_IDENTITY_KEY,
-                identity_address=TEST_NODE_ADDRESS,
+
                 wallet_address=TEST_WALLET,
             )
 
@@ -827,7 +827,7 @@ class TestSignatureMessageFormats:
             await register_node(
                 client, v2_settings, "1.2.3.4",
                 identity_key=TEST_IDENTITY_KEY,
-                identity_address=TEST_NODE_ADDRESS,
+
                 wallet_address=TEST_WALLET,
                 staking_address=TEST_STAKING_ADDRESS,
             )
@@ -860,7 +860,7 @@ class TestAutoModePayloads:
             await register_node(
                 client, auto_settings, "1.2.3.4",
                 identity_key=TEST_IDENTITY_KEY,
-                identity_address=TEST_NODE_ADDRESS,
+
                 wallet_address=TEST_WALLET,
                 staking_address=TEST_WALLET,
             )
@@ -885,7 +885,7 @@ class TestAutoModePayloads:
                 await register_node(
                     client, auto_settings, "1.2.3.4",
                     identity_key=TEST_IDENTITY_KEY,
-                    identity_address=TEST_NODE_ADDRESS,
+    
                     wallet_address=TEST_WALLET,
                     staking_address=TEST_WALLET,
                 )
@@ -905,7 +905,7 @@ class TestAutoModePayloads:
                 await register_node(
                     client, auto_settings, "1.2.3.4",
                     identity_key=TEST_IDENTITY_KEY,
-                    identity_address=TEST_NODE_ADDRESS,
+    
                     wallet_address=TEST_WALLET,
                     staking_address=TEST_WALLET,
                 )
@@ -932,7 +932,7 @@ class TestActiveModeTracking:
             await register_node(
                 client, reg_settings, "1.2.3.4",
                 identity_key=TEST_IDENTITY_KEY,
-                identity_address=TEST_NODE_ADDRESS,
+
                 wallet_address=TEST_WALLET,
             )
 
@@ -951,7 +951,7 @@ class TestActiveModeTracking:
             await register_node(
                 client, v2_settings, "1.2.3.4",
                 identity_key=TEST_IDENTITY_KEY,
-                identity_address=TEST_NODE_ADDRESS,
+
                 wallet_address=TEST_WALLET,
                 staking_address=TEST_WALLET,
             )
@@ -971,7 +971,7 @@ class TestActiveModeTracking:
             await register_node(
                 client, auto_settings, "1.2.3.4",
                 identity_key=TEST_IDENTITY_KEY,
-                identity_address=TEST_NODE_ADDRESS,
+
                 wallet_address=TEST_WALLET,
                 staking_address=TEST_WALLET,
             )
@@ -992,7 +992,7 @@ class TestActiveModeTracking:
             await register_node(
                 client, auto_settings, "1.2.3.4",
                 identity_key=TEST_IDENTITY_KEY,
-                identity_address=TEST_NODE_ADDRESS,
+
                 wallet_address=TEST_WALLET,
                 staking_address="",
             )
@@ -1045,7 +1045,7 @@ class TestV2EdgeCases:
                 client, v2_settings, "1.2.3.4",
                 upnp_endpoint=("203.0.113.5", 9090),
                 identity_key=TEST_IDENTITY_KEY,
-                identity_address=TEST_NODE_ADDRESS,
+
                 wallet_address=TEST_WALLET,
                 staking_address=TEST_WALLET,
             )
@@ -1075,7 +1075,7 @@ class TestV2EdgeCases:
             await register_node(
                 client, s, "1.2.3.4",
                 identity_key=TEST_IDENTITY_KEY,
-                identity_address=TEST_NODE_ADDRESS,
+
                 wallet_address=TEST_WALLET,
                 staking_address=TEST_WALLET,
             )
@@ -1104,7 +1104,7 @@ class TestV2EdgeCases:
             await register_node(
                 client, s, "1.2.3.4",
                 identity_key=TEST_IDENTITY_KEY,
-                identity_address=TEST_NODE_ADDRESS,
+
                 wallet_address=TEST_WALLET,
             )
 

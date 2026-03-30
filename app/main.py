@@ -309,7 +309,6 @@ async def _phase_register(ctx: _NodeContext) -> None:
     node_id, gateway_ca_cert = await register_node(
         ctx.http, ctx.s, ctx.public_ip,
         identity_key=ctx.identity_key,
-        identity_address=ctx.identity_address,
         upnp_endpoint=ctx.upnp_endpoint,
         wallet_address=ctx.wallet_address,
         staking_address=ctx.staking_address,

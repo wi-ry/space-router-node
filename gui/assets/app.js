@@ -302,18 +302,19 @@ function initOnboarding() {
         hideAll();
         showStatus();
       } else {
-        // Show error inline
+        // Show error inline (remove any previous error first)
+        btn.parentNode.querySelectorAll("p.error").forEach(el => el.remove());
         const errEl = document.createElement("p");
         errEl.className = "error";
         errEl.style.marginTop = "12px";
         errEl.textContent = result.error || "Unknown error";
         btn.parentNode.insertBefore(errEl, btn.nextSibling);
         btn.disabled = false;
-        btn.textContent = "Start SpaceRouter";
+        btn.textContent = "Start Node";
       }
     } catch (e) {
       btn.disabled = false;
-      btn.textContent = "Start SpaceRouter";
+      btn.textContent = "Start Node";
     }
   });
 }

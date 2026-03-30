@@ -180,7 +180,6 @@ async def register_node(
     public_ip: str,
     *,
     identity_key: str,
-    identity_address: str = "",
     wallet_address: str,
     staking_address: str = "",
     collection_address: str = "",
