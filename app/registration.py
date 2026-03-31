@@ -293,18 +293,8 @@ async def check_node_status(
 
     Returns the status string ('online', 'offline', etc.) or raises on error.
     """
-    signature, timestamp = sign_request(identity_key, "check_status", node_id)
-
-    url = f"{settings.COORDINATION_API_URL}/nodes/{node_id}/status"
-    resp = await http_client.get(
-        url,
-        params={
-            "wallet_address": _effective_wallet(settings),
-            "signature": signature,
-            "timestamp": timestamp,
-        },
-        timeout=10.0,
-    )
+    url = f"{settings.COORDINATION_API_URL}/nodes/{node_id}"
+    resp = await http_client.get(url, timeout=10.0)
     resp.raise_for_status()
     data = resp.json()
     return data.get("status", "unknown")
