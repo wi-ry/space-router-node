@@ -464,8 +464,9 @@ async def _status_summary_loop(
             pass
 
         logger.info(
-            "--- Status: uptime=%s | connections=%d (active=%d) | "
+            "--- Status [%s]: uptime=%s | connections=%d (active=%d) | "
             "health_checks=%d (failures=%d) | reconnects=%d ---",
+            ctx.node_id[:12] if ctx.node_id else "unregistered",
             activity.uptime_str,
             activity.connections_served,
             activity.connections_active,
@@ -484,14 +485,13 @@ async def _run(
     state_machine: NodeStateMachine | None = None,
 ) -> None:
     """Main orchestrator loop. Drives phases and handles retries."""
-    from app.node_logging import activity  # noqa: E402
+    from app.node_logging import activity, setup_cli_logging  # noqa: E402
     from app.node_logging import _STATUS_INTERVAL  # noqa: E402
 
     s = settings_override or load_settings()
 
-    # Configure logging from settings
-    log_level = getattr(logging, s.LOG_LEVEL.upper(), logging.INFO)
-    logging.getLogger().setLevel(log_level)
+    # Configure logging from settings (updates both logger and handler levels)
+    setup_cli_logging(s.LOG_LEVEL)
 
     own_stop_event = stop_event is None
     if stop_event is None:
