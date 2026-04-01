@@ -468,6 +468,14 @@ h2 {
   background: rgba(231, 76, 60, 0.1);
 }
 
+.btn-danger {
+  background: #e74c3c;
+}
+
+.btn-danger:hover {
+  background: #c0392b;
+}
+
 /* Restart actions */
 .restart-actions {
   display: flex;

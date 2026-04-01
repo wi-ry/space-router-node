@@ -72,7 +72,7 @@ def _first_run_setup() -> bool:
     """Interactive first-time setup wizard.
 
     Creates the identity key file and writes settings to .env.
-    Skips identity key steps when the key already exists (e.g. after --reset --keep-identity).
+    Skips identity key steps when the key already exists.
     Returns True on success, False if user cancels (Ctrl+C).
     """
     s = load_settings()
@@ -655,10 +655,9 @@ async def _run(
 
 
 def _do_reset() -> None:
-    """Handle --reset: delete config and optionally identity key."""
+    """Handle --reset: delete all config, identity key, and certificates."""
     from app.paths import config_dir
 
-    keep_identity = "--keep-identity" in sys.argv
     s = load_settings()
 
     # Check both well-known config dir and CWD for config files
@@ -668,9 +667,8 @@ def _do_reset() -> None:
 
     env_file = str(wellknown_env) if wellknown_env.is_file() else cwd_env
     certs_dir = os.path.dirname(os.path.abspath(s.IDENTITY_KEY_PATH)) or "certs"
-    identity_path = os.path.abspath(s.IDENTITY_KEY_PATH)
 
-    if not keep_identity and sys.stdin.isatty():
+    if sys.stdin.isatty():
         print("WARNING: This will delete your identity key and all configuration.")
         confirm = input("Type YES to confirm: ").strip()
         if confirm != "YES":
@@ -682,21 +680,13 @@ def _do_reset() -> None:
         os.remove(env_file)
         print(f"Removed {env_file}")
 
-    # Delete certs (except identity key if --keep-identity)
+    # Delete certs directory (identity key + all certificates)
     if os.path.isdir(certs_dir):
         import shutil
-        if keep_identity:
-            for f in os.listdir(certs_dir):
-                fp = os.path.join(certs_dir, f)
-                if os.path.abspath(fp) != identity_path and os.path.isfile(fp):
-                    os.remove(fp)
-                    print(f"Removed {fp}")
-            print(f"Kept identity key: {identity_path}")
-        else:
-            shutil.rmtree(certs_dir)
-            print(f"Removed {certs_dir}/")
+        shutil.rmtree(certs_dir)
+        print(f"Removed {certs_dir}/")
 
-    print("Reset complete." + (" Identity key preserved." if keep_identity else ""))
+    print("Reset complete.")
 
 
 def main() -> None:

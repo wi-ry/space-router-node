@@ -490,11 +490,9 @@ async function updateStatus() {
 
 function initFreshRestart() {
   $("#btn-fresh-restart").addEventListener("click", function () {
-    // Reset button states
-    $("#btn-restart-keep").disabled = false;
-    $("#btn-restart-keep").textContent = "Keep Addresses";
-    $("#btn-restart-clear").disabled = false;
-    $("#btn-restart-clear").textContent = "Clear Everything";
+    // Reset button state
+    $("#btn-restart-confirm").disabled = false;
+    $("#btn-restart-confirm").textContent = "Reset Node";
     hideAll();
     show("screen-fresh-restart");
   });
@@ -504,25 +502,21 @@ function initFreshRestart() {
     showStatus();
   });
 
-  $("#btn-restart-keep").addEventListener("click", async function () {
-    await doFreshRestart(true);
-  });
-
-  $("#btn-restart-clear").addEventListener("click", async function () {
-    await doFreshRestart(false);
+  $("#btn-restart-confirm").addEventListener("click", async function () {
+    await doFreshRestart();
   });
 }
 
-async function doFreshRestart(keepAddresses) {
-  const btn = keepAddresses ? $("#btn-restart-keep") : $("#btn-restart-clear");
+async function doFreshRestart() {
+  const btn = $("#btn-restart-confirm");
   btn.disabled = true;
   btn.textContent = "Resetting...";
 
   try {
-    const result = await window.pywebview.api.fresh_restart(keepAddresses);
+    const result = await window.pywebview.api.fresh_restart();
     if (!result.ok) {
       btn.disabled = false;
-      btn.textContent = keepAddresses ? "Keep Addresses" : "Clear Everything";
+      btn.textContent = "Reset Node";
       return;
     }
 
@@ -530,29 +524,10 @@ async function doFreshRestart(keepAddresses) {
     hideAll();
     show("screen-onboarding");
     initOnboarding();
-
-    if (keepAddresses) {
-      loadSavedAddresses();
-    }
   } catch (e) {
     btn.disabled = false;
-    btn.textContent = keepAddresses ? "Keep Addresses" : "Clear Everything";
+    btn.textContent = "Reset Node";
   }
-}
-
-async function loadSavedAddresses() {
-  try {
-    const status = await window.pywebview.api.get_status();
-    if (status.staking_address) {
-      $("#staking-input").value = status.staking_address;
-    }
-    if (
-      status.collection_address &&
-      status.collection_address !== status.staking_address
-    ) {
-      $("#collection-input").value = status.collection_address;
-    }
-  } catch (e) {}
 }
 
 // ── Action Buttons (Retry / Stop) ──

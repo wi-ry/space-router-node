@@ -211,35 +211,25 @@ class ConfigStore:
         else:
             return {"mode": "tunnel", "public_host": public_ip, "port": public_port}
 
-    def reset(self, keep_addresses: bool = False, keep_identity: bool = True) -> None:
-        """Reset config to defaults.
+    def reset(self) -> None:
+        """Fully reset config to defaults, deleting identity key and certificates."""
+        import shutil
 
-        Args:
-            keep_addresses: Preserve staking/collection addresses.
-            keep_identity: If False, also delete the identity key file.
-        """
-        saved = {}
-        if keep_addresses:
-            saved["SR_STAKING_ADDRESS"] = self.get("SR_STAKING_ADDRESS")
-            saved["SR_COLLECTION_ADDRESS"] = self.get("SR_COLLECTION_ADDRESS")
+        # Delete identity key file
+        key_path = self.get("SR_IDENTITY_KEY_PATH") or str(
+            self._dir / "certs" / "node-identity.key"
+        )
+        if os.path.isfile(key_path):
+            os.remove(key_path)
 
-        # Optionally delete identity key file
-        if not keep_identity:
-            key_path = self.get("SR_IDENTITY_KEY_PATH") or str(
-                self._dir / "certs" / "node-identity.key"
-            )
-            if os.path.isfile(key_path):
-                os.remove(key_path)
+        # Delete all certificates in the certs directory
+        certs_dir = self._dir / "certs"
+        if certs_dir.is_dir():
+            shutil.rmtree(certs_dir)
 
-        # Rewrite with defaults
+        # Rewrite config with defaults
         lines = [f"{k}={v}" for k, v in _DEFAULTS.items()]
         self._path.write_text("\n".join(lines) + "\n")
-
-        # Restore addresses if requested
-        if keep_addresses:
-            for key, value in saved.items():
-                if value:
-                    set_key(str(self._path), key, value)
 
     def apply_to_env(self) -> None:
         """Load all config values into os.environ so pydantic-settings picks them up."""
