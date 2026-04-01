@@ -188,7 +188,6 @@ async def _pipe(
     writer: asyncio.StreamWriter,
     counter: list[int],
     buffer_size: int,
-    activity_event: asyncio.Event | None = None,
 ) -> None:
     try:
         while True:
@@ -198,8 +197,6 @@ async def _pipe(
             writer.write(data)
             await writer.drain()
             counter[0] += len(data)
-            if activity_event is not None:
-                activity_event.set()
     except (ConnectionResetError, BrokenPipeError, OSError, asyncio.CancelledError):
         pass
 
@@ -216,71 +213,38 @@ async def relay_streams(
     buffer_size: int,
     timeout: float = 300.0,
 ) -> tuple[int, int]:
-    """Bidirectional byte relay with **idle** timeout.
+    """Bidirectional byte relay with idle timeout.
 
-    The *timeout* is reset every time data flows in either direction.
-    A hard safety cap (``MAX_RELAY_DURATION``) ensures no relay lives
-    forever even if there is continuous low-rate traffic.
+    Waits for EITHER pipe to finish (EOF from one side), then cancels
+    the other.  A hard safety cap (``MAX_RELAY_DURATION``) ensures no
+    relay lives forever even if there is continuous low-rate traffic.
     """
     bytes_a_to_b = [0]
     bytes_b_to_a = [0]
-    activity = asyncio.Event()
 
     task_a = asyncio.create_task(
-        _pipe(reader_a, writer_b, bytes_a_to_b, buffer_size, activity)
+        _pipe(reader_a, writer_b, bytes_a_to_b, buffer_size)
     )
     task_b = asyncio.create_task(
-        _pipe(reader_b, writer_a, bytes_b_to_a, buffer_size, activity)
+        _pipe(reader_b, writer_a, bytes_b_to_a, buffer_size)
     )
 
-    done = asyncio.gather(task_a, task_b, return_exceptions=True)
-    deadline = asyncio.get_event_loop().time() + MAX_RELAY_DURATION
-
     try:
-        while True:
-            activity.clear()
-            remaining = deadline - asyncio.get_event_loop().time()
-            if remaining <= 0:
-                logger.debug("Relay hit absolute duration cap")
-                break
-
-            idle_limit = min(timeout, remaining)
-
-            # Wait for either: both pipes finish, or activity, or idle timeout
-            activity_task = asyncio.create_task(activity.wait())
-            finished, pending = await asyncio.wait(
-                [done, activity_task],
-                timeout=idle_limit,
-                return_when=asyncio.FIRST_COMPLETED,
-            )
-
-            # Clean up the activity waiter if it didn't fire
-            if activity_task in pending:
-                activity_task.cancel()
-                try:
-                    await activity_task
-                except asyncio.CancelledError:
-                    pass
-
-            if done in finished:
-                # Both pipes completed naturally
-                break
-
-            if not finished:
-                # Neither activity nor completion → idle timeout
-                logger.debug("Relay idle timeout (%ss)", timeout)
-                break
-
-            # Activity detected — loop again with fresh idle timer
+        # Wait for EITHER pipe to finish (EOF from one side), then
+        # cancel the other.  Previously used asyncio.gather which
+        # waited for BOTH — causing 300s hangs when one side closed
+        # the connection first (e.g. health probes, short requests).
+        done, pending = await asyncio.wait_for(
+            asyncio.wait({task_a, task_b}, return_when=asyncio.FIRST_COMPLETED),
+            timeout=min(timeout, MAX_RELAY_DURATION),
+        )
+        for task in pending:
+            task.cancel()
+        await asyncio.gather(*pending, return_exceptions=True)
     except asyncio.TimeoutError:
-        pass
-    finally:
         task_a.cancel()
         task_b.cancel()
-        try:
-            await asyncio.gather(task_a, task_b, return_exceptions=True)
-        except asyncio.CancelledError:
-            pass
+        await asyncio.gather(task_a, task_b, return_exceptions=True)
 
     return bytes_a_to_b[0], bytes_b_to_a[0]
 
@@ -644,6 +608,20 @@ def _service_unavailable() -> bytes:
     )
 
 
+def _is_probe_target(target_host: str, settings: Settings) -> bool:
+    """Return True if the CONNECT target is a coordination API probe."""
+    if target_host == CHALLENGE_DOMAIN:
+        return True
+    # Liveness probes CONNECT to the coordination API's own hostname.
+    try:
+        api_host = urlparse(settings.COORDINATION_API_URL).hostname
+        if api_host and target_host == api_host:
+            return True
+    except Exception:
+        pass
+    return False
+
+
 async def handle_client(
     reader: asyncio.StreamReader,
     writer: asyncio.StreamWriter,
@@ -675,8 +653,7 @@ async def handle_client(
     async with sem:
         _active_connections += 1
         from app.node_logging import activity as _activity  # noqa: E402
-        total = _activity.record_connection()
-        logger.info("Connection #%d from %s (active=%d)", total, peer, _active_connections)
+        counted = False
         try:
             result = await _read_request_head(reader, settings.REQUEST_TIMEOUT)
             if result is None:
@@ -698,18 +675,30 @@ async def handle_client(
                 target_host = host_port[0]
                 target_port = int(host_port[1]) if len(host_port) > 1 else 443
 
-                logger.info(
-                    "CONNECT %s:%s%s",
-                    target_host,
-                    target_port,
-                    f" [request_id={request_id}]" if request_id else "",
-                )
+                is_probe = _is_probe_target(target_host, settings)
+
+                if not is_probe:
+                    counted = True
+                    total = _activity.record_connection()
+                    logger.info(
+                        "Connection #%d CONNECT %s:%s (active=%d)%s",
+                        total, target_host, target_port, _active_connections,
+                        f" [request_id={request_id}]" if request_id else "",
+                    )
+                else:
+                    logger.info(
+                        "Probe CONNECT %s:%s%s",
+                        target_host, target_port,
+                        f" [request_id={request_id}]" if request_id else "",
+                    )
+
                 await handle_connect(reader, writer, target_host, target_port, settings, request_id)
             else:
+                counted = True
+                total = _activity.record_connection()
                 logger.info(
-                    "%s %s%s",
-                    method,
-                    target,
+                    "Connection #%d %s %s (active=%d)%s",
+                    total, method, target, _active_connections,
                     f" [request_id={request_id}]" if request_id else "",
                 )
                 await handle_http_forward(reader, writer, method, target, version, headers, settings, request_id)
@@ -718,7 +707,8 @@ async def handle_client(
             logger.exception("Unhandled error in client handler")
         finally:
             _active_connections -= 1
-            _activity.record_connection_closed()
+            if counted:
+                _activity.record_connection_closed()
             logger.debug("Connection closed from %s (active=%d)", peer, _active_connections)
             try:
                 writer.close()
