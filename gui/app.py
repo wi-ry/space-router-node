@@ -189,8 +189,8 @@ def main() -> None:
         def on_show() -> None:
             window.show()
 
-        # Wire up single-instance "show" callback now that window exists
-        instance_lock._on_show = on_show
+        # Ungate the single-instance accept loop now that the window exists
+        instance_lock.set_show_callback(on_show)
 
         def on_quit() -> None:
             nonlocal _quitting

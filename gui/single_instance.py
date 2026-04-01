@@ -25,19 +25,27 @@ class SingleInstanceLock:
         self._server: socket.socket | None = None
         self._running = False
         self._on_show: object = None  # callable or None
+        self._ready = threading.Event()  # gates accept loop until callback is set
 
-    def try_acquire(self, *, on_show_request=None) -> bool:
+    def set_show_callback(self, callback) -> None:
+        """Register the callback invoked when a second instance sends SHOW.
+
+        Must be called after the window is created.  The accept loop blocks
+        until this is called, so early SHOW requests are queued — not dropped.
+        """
+        self._on_show = callback
+        self._ready.set()
+
+    def try_acquire(self) -> bool:
         """Attempt to become the single instance.
 
         Returns ``True`` if the lock was acquired (we are the first instance).
         Returns ``False`` if another SpaceRouter instance is already running —
         in that case we signal it to show its window before returning.
 
-        *on_show_request* is called (from a background thread) whenever a
-        second instance asks this one to show its window.
+        Call :meth:`set_show_callback` after window creation to ungate the
+        accept loop.
         """
-        self._on_show = on_show_request
-
         try:
             sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             # On Windows SO_EXCLUSIVEADDRUSE prevents another process from
@@ -71,6 +79,10 @@ class SingleInstanceLock:
     # ------------------------------------------------------------------
 
     def _accept_loop(self) -> None:
+        # Block until set_show_callback() is called so we never drop a
+        # SHOW request that arrives during startup initialisation.
+        self._ready.wait()
+
         while self._running:
             try:
                 conn, _ = self._server.accept()  # type: ignore[union-attr]
@@ -109,6 +121,7 @@ class SingleInstanceLock:
     def release(self) -> None:
         """Release the lock (close the server socket)."""
         self._running = False
+        self._ready.set()  # unblock accept loop so it can exit
         if self._server:
             try:
                 self._server.close()
