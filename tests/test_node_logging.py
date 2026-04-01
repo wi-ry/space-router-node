@@ -185,17 +185,23 @@ class TestCLIFormatter:
 
 class TestSetupCLILogging:
     def test_replaces_handlers(self):
-        # Add a dummy handler first
+        # Add a dummy StreamHandler first
         root = logging.getLogger()
         dummy = logging.StreamHandler()
         root.addHandler(dummy)
-        count_before = len(root.handlers)
 
         setup_cli_logging("INFO")
 
-        # Should have exactly one handler (CLIFormatter)
-        assert len(root.handlers) == 1
-        assert isinstance(root.handlers[0].formatter, CLIFormatter)
+        # Plain StreamHandlers (not FileHandlers) should be replaced;
+        # only our CLIFormatter StreamHandler should remain.
+        # (pytest may add its own FileHandler-based handlers which are preserved.)
+        stream_handlers = [
+            h for h in root.handlers
+            if isinstance(h, logging.StreamHandler)
+            and not isinstance(h, logging.FileHandler)
+        ]
+        assert len(stream_handlers) == 1
+        assert isinstance(stream_handlers[0].formatter, CLIFormatter)
 
     def test_sets_level(self):
         setup_cli_logging("DEBUG")
