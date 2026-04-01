@@ -8,6 +8,7 @@ Lifecycle phases:
   5. STOPPING — Deregister, close server, remove UPnP mapping
 """
 
+import argparse
 import asyncio
 import datetime
 import functools
@@ -18,28 +19,13 @@ import signal
 import socket
 import sys
 
-import httpx
 from dotenv import set_key
 
-from app.config import Settings, load_settings, _default_coordination_url
-from app.errors import NodeError, NodeErrorCode, classify_error
+# Light imports only — heavy libraries (httpx, cryptography, web3, etc.)
+# are deferred to first use inside _run() / _phase_*() to keep CLI startup fast.
+from app.config import load_settings, _default_coordination_url
 from app.identity import KeystorePassphraseRequired, load_or_create_identity, write_identity_key
-from app.proxy_handler import handle_client
-from app.registration import (
-    check_node_status,
-    deregister_node,
-    detect_public_ip,
-    register_node,
-    request_probe,
-    save_gateway_ca_cert,
-)
 from app.state import NodeState, NodeStateMachine
-from app.tls import (
-    check_certificate_expiry,
-    create_mtls_server_ssl_context,
-    create_server_ssl_context,
-    ensure_certificates,
-)
 from app.version import __version__
 from app.wallet import validate_wallet_address
 
@@ -58,98 +44,89 @@ _ENV_FILE = ".env"
 # First-run interactive setup (CLI only)
 # ---------------------------------------------------------------------------
 
-def _prompt(prompt_text: str, default: str = "") -> str:
-    """Prompt the user for input with an optional default."""
-    if default:
-        display = f"{prompt_text} [{default}]: "
-    else:
-        display = f"{prompt_text}: "
-    value = input(display).strip()
-    return value or default
-
-
 def _first_run_setup() -> bool:
-    """Interactive first-time setup wizard.
+    """Interactive first-time setup wizard with rich prompts.
 
     Creates the identity key file and writes settings to .env.
-    Skips identity key steps when the key already exists (e.g. after --reset --keep-identity).
+    Skips identity key steps when the key already exists.
     Returns True on success, False if user cancels (Ctrl+C).
     """
+    from app.cli_ui import (
+        wizard_banner, wizard_step, wizard_select, wizard_input,
+        wizard_confirm, wizard_success, wizard_error, wizard_info, wizard_done,
+    )
+
     s = load_settings()
     key_exists = os.path.isfile(s.IDENTITY_KEY_PATH)
     step = 1
 
-    print()
-    print("─" * 53)
-    print("  SpaceRouter Node — Setup")
-    print("─" * 53)
+    wizard_banner()
 
     try:
         identity_address = None
         passphrase = ""
 
         if key_exists:
-            # Identity key already exists — load it and skip key/passphrase steps
             try:
                 _, identity_address = load_or_create_identity(s.IDENTITY_KEY_PATH)
-                print(f"\n   Identity key found: {identity_address}")
+                wizard_success(f"Identity key found: {identity_address}")
             except KeystorePassphraseRequired:
-                passphrase = getpass.getpass("\n   Identity key is encrypted. Passphrase: ")
+                passphrase = wizard_input("Identity key is encrypted. Passphrase", password=True)
                 _, identity_address = load_or_create_identity(s.IDENTITY_KEY_PATH, passphrase)
-                print(f"   ✓ Unlocked identity: {identity_address}")
+                wizard_success(f"Unlocked identity: {identity_address}")
         else:
             # --- Step 1: Identity Key ---
-            print()
-            print(f"{step}. Identity Key")
+            wizard_step(step, "Identity Key")
             step += 1
-            generate = _prompt("   Generate a new identity key? [Y/n]", default="Y").lower()
+            idx = wizard_select("", [
+                ("Generate new key", "(recommended)"),
+                ("Import existing key", "(paste private key hex)"),
+            ], default=0)
 
             identity_key_hex = None
-            if generate in ("y", "yes", ""):
-                print("   (Identity key will be generated on first start)")
+            if idx == 0:
+                wizard_info("Identity key will be generated on first start")
             else:
                 while True:
-                    raw = getpass.getpass("   Enter identity private key (hex): ").strip()
+                    raw = wizard_input("Enter identity private key (hex)", password=True)
                     try:
                         from eth_account import Account
                         account = Account.from_key(raw)
                         identity_key_hex = account.key.hex()
                         identity_address = account.address.lower()
-                        print(f"   ✓ Identity address: {account.address}")
+                        wizard_success(f"Identity address: {account.address}")
                         break
                     except Exception:
-                        print("   Invalid private key — expected 32-byte hex (with or without 0x prefix).")
+                        wizard_error("Invalid private key — expected 32-byte hex (with or without 0x prefix)")
 
             # --- Step 2: Identity Passphrase ---
-            print()
-            print(f"{step}. Identity Passphrase (optional)")
+            wizard_step(step, "Identity Passphrase (optional)")
             step += 1
-            encrypt = _prompt("   Encrypt the identity key with a passphrase? [y/N]", default="N").lower()
+            encrypt = wizard_confirm("Encrypt identity key with a passphrase?", default=False)
 
-            if encrypt in ("y", "yes"):
+            if encrypt:
                 while True:
-                    p1 = getpass.getpass("   Enter passphrase: ")
-                    p2 = getpass.getpass("   Confirm passphrase: ")
+                    p1 = wizard_input("Enter passphrase", password=True)
+                    p2 = wizard_input("Confirm passphrase", password=True)
                     if p1 == p2:
                         passphrase = p1
                         break
-                    print("   Passphrases do not match — try again.")
+                    wizard_error("Passphrases do not match — try again")
 
-            # Write the identity key file now (so we can show the address for steps 3+)
+            # Write the identity key file now
             key_path = s.IDENTITY_KEY_PATH
             if identity_key_hex is not None:
                 identity_address = write_identity_key(key_path, identity_key_hex, passphrase)
             else:
                 _, identity_address = load_or_create_identity(key_path, passphrase)
-                print(f"   ✓ Generated identity address: {identity_address}")
+                wizard_success(f"Generated identity address: {identity_address}")
 
         # --- Staking Address ---
-        print()
-        print(f"{step}. Staking Address (optional)")
+        wizard_step(step, "Staking Address (optional)")
         step += 1
-        print(f"   Leave blank to use identity address ({identity_address})")
+        wizard_info(f"Leave blank to use identity address ({identity_address})")
         while True:
-            raw = _prompt("   Enter staking wallet address", default="")
+            raw = wizard_input("Staking wallet address")
             if not raw:
                 staking_address = ""
                 break
@@ -157,17 +134,16 @@ def _first_run_setup() -> bool:
                 staking_address = validate_wallet_address(raw)
                 break
             except ValueError as exc:
-                print(f"   Invalid address: {exc}")
+                wizard_error(f"Invalid address: {exc}")
 
         effective_staking = staking_address or identity_address
 
         # --- Collection Address ---
-        print()
-        print(f"{step}. Collection Address (optional)")
+        wizard_step(step, "Collection Address (optional)")
         step += 1
-        print(f"   Leave blank to use staking address ({effective_staking})")
+        wizard_info(f"Leave blank to use staking address ({effective_staking})")
         while True:
-            raw = _prompt("   Enter collection wallet address", default="")
+            raw = wizard_input("Collection wallet address")
             if not raw:
                 collection_address = ""
                 break
@@ -175,7 +151,28 @@ def _first_run_setup() -> bool:
                 collection_address = validate_wallet_address(raw)
                 break
             except ValueError as exc:
-                print(f"   Invalid address: {exc}")
+                wizard_error(f"Invalid address: {exc}")
+
+        # --- Network Configuration ---
+        wizard_step(step, "Network Configuration")
+        step += 1
+        choice = wizard_select("", [
+            ("Automatic (UPnP)", "recommended for home routers"),
+            ("Manual / Tunnel", "you provide public hostname and port"),
+        ], default=0)
+
+        upnp_enabled = True
+        public_ip = ""
+        public_port = ""
+
+        if choice == 1:
+            upnp_enabled = False
+            while True:
+                public_ip = wizard_input("Public hostname or IP").strip()
+                if public_ip:
+                    break
+                wizard_error("Hostname is required for tunnel mode")
+            public_port = wizard_input("Public port", default="9090")
 
         # --- Persist to .env ---
         if passphrase:
@@ -185,12 +182,14 @@ def _first_run_setup() -> bool:
         if collection_address:
             set_key(_ENV_FILE, "SR_COLLECTION_ADDRESS", collection_address)
 
-        print()
-        print("─" * 53)
-        print(f"  Configuration saved to {_ENV_FILE}")
-        print("  Starting node...")
-        print("─" * 53)
-        print()
+        # Network mode
+        set_key(_ENV_FILE, "SR_UPNP_ENABLED", str(upnp_enabled).lower())
+        if public_ip:
+            set_key(_ENV_FILE, "SR_PUBLIC_IP", public_ip)
+        if public_port and public_port != "9090":
+            set_key(_ENV_FILE, "SR_PUBLIC_PORT", public_port)
+
+        wizard_done(_ENV_FILE)
         return True
 
     except (KeyboardInterrupt, EOFError):
@@ -203,7 +202,7 @@ def _first_run_setup() -> bool:
 class _NodeContext:
     """Mutable context passed between phases to accumulate state."""
 
-    def __init__(self, settings: Settings, http_client: httpx.AsyncClient) -> None:
+    def __init__(self, settings, http_client) -> None:  # noqa: ANN001
         self.s = settings
         self.http = http_client
         self.public_ip: str = ""
@@ -221,6 +220,10 @@ class _NodeContext:
 
 async def _phase_init(ctx: _NodeContext) -> None:
     """INITIALIZING: UPnP, IP detection, wallet validation, identity, TLS."""
+    from app.errors import NodeError, NodeErrorCode
+    from app.registration import detect_public_ip
+    from app.tls import ensure_certificates, create_server_ssl_context
+
     s = ctx.s
 
     # 1. UPnP port mapping
@@ -305,6 +308,8 @@ async def _phase_init(ctx: _NodeContext) -> None:
 
 async def _phase_bind(ctx: _NodeContext) -> None:
     """BINDING: Start the TLS server."""
+    from app.proxy_handler import handle_client
+
     s = ctx.s
     handler = functools.partial(handle_client, settings=s)
 
@@ -322,6 +327,8 @@ async def _phase_bind(ctx: _NodeContext) -> None:
 
 async def _phase_register(ctx: _NodeContext) -> None:
     """REGISTERING: Register with the Coordination API."""
+    from app.registration import register_node, save_gateway_ca_cert
+
     node_id, gateway_ca_cert = await register_node(
         ctx.http, ctx.s, ctx.public_ip,
         identity_key=ctx.identity_key,
@@ -343,6 +350,8 @@ async def _phase_register(ctx: _NodeContext) -> None:
 
 def _upgrade_mtls(ctx: _NodeContext) -> None:
     """Attempt mTLS upgrade (non-fatal on failure)."""
+    from app.tls import create_mtls_server_ssl_context
+
     s = ctx.s
     if not s.MTLS_ENABLED:
         return
@@ -361,6 +370,8 @@ def _upgrade_mtls(ctx: _NodeContext) -> None:
 
 async def _rebind_server_mtls(ctx: _NodeContext) -> None:
     """Close and rebind server with the (possibly upgraded) SSL context."""
+    from app.proxy_handler import handle_client
+
     s = ctx.s
     if ctx.server:
         ctx.server.close()
@@ -378,6 +389,12 @@ async def _health_loop(
     stop_event: asyncio.Event,
 ) -> None:
     """Periodic health checks while RUNNING."""
+    from app.node_logging import activity  # noqa: E402
+    from app.registration import check_node_status, request_probe
+    from app.tls import (
+        check_certificate_expiry, ensure_certificates, create_server_ssl_context,
+    )
+
     consecutive_failures = 0
     last_cert_check = 0.0
 
@@ -393,16 +410,20 @@ async def _health_loop(
 
         # Heartbeat: check if node is still registered
         try:
-            status = await check_node_status(
+            node_data = await check_node_status(
                 ctx.http, ctx.s, ctx.node_id, identity_key=ctx.identity_key,
             )
+            status = node_data.get("status", "unknown")
+            activity.record_health_check(status)
             if status in ("online", "active"):
                 consecutive_failures = 0
+                logger.debug("Health check OK: status=%s", status)
             else:
                 logger.warning("Health check: node status is '%s'", status)
                 consecutive_failures += 1
         except Exception as exc:
             consecutive_failures += 1
+            activity.record_health_check("error")
             logger.warning("Health check failed (%d/%d): %s",
                            consecutive_failures, _HEARTBEAT_FAIL_THRESHOLD, exc)
 
@@ -443,6 +464,131 @@ async def _health_loop(
             pass  # non-critical
 
 
+async def _status_summary_loop(
+    ctx: "_NodeContext",
+    stop_event: asyncio.Event,
+    interval: float,
+) -> None:
+    """Periodically log a node status summary (non-dashboard mode)."""
+    from app.node_logging import activity  # noqa: E402
+
+    while not stop_event.is_set():
+        try:
+            await asyncio.wait_for(stop_event.wait(), timeout=interval)
+            break
+        except asyncio.TimeoutError:
+            pass
+
+        logger.info(
+            "--- Status [%s]: uptime=%s | connections=%d (active=%d) | "
+            "health_checks=%d (failures=%d) | reconnects=%d ---",
+            ctx.node_id[:12] if ctx.node_id else "unregistered",
+            activity.uptime_str,
+            activity.connections_served,
+            activity.connections_active,
+            activity.health_check_count,
+            activity.health_check_failures,
+            activity.reconnect_count,
+        )
+
+
+# Self-probe interval — more frequent than health checks to catch bore disconnects fast
+_SELF_PROBE_INTERVAL = 60  # 1 minute
+
+
+async def _self_probe_loop(
+    ctx: "_NodeContext",
+    sm: NodeStateMachine,
+    stop_event: asyncio.Event,
+    dashboard=None,  # noqa: ANN001
+) -> None:
+    """Periodically check node status from coordination's perspective.
+
+    Runs every 60s (vs 5min for health checks) to catch bore tunnel
+    disconnects and other reachability issues quickly.  Also feeds
+    staking_status, health_score, and probe results to the dashboard.
+    """
+    import time as _time
+
+    from app.registration import check_node_status, request_probe
+
+    # Run first check almost immediately (5s delay for registration to settle)
+    first_run = True
+    while not stop_event.is_set():
+        delay = 5 if first_run else _SELF_PROBE_INTERVAL
+        first_run = False
+        try:
+            await asyncio.wait_for(stop_event.wait(), timeout=delay)
+            break
+        except asyncio.TimeoutError:
+            pass
+
+        if not ctx.node_id:
+            continue
+
+        try:
+            node_data = await check_node_status(
+                ctx.http, ctx.s, ctx.node_id, identity_key=ctx.identity_key,
+            )
+            status = node_data.get("status", "unknown")
+            health_score = node_data.get("health_score", 0)
+            staking_status = node_data.get("staking_status", "—")
+
+            probe_result = status
+            if status not in ("online", "active"):
+                logger.warning(
+                    "Self-probe: coordination reports status='%s' health_score=%.1f — requesting probe",
+                    status, health_score,
+                )
+                try:
+                    await request_probe(ctx.http, ctx.s, ctx.node_id, identity_key=ctx.identity_key)
+                    probe_result = "probe_requested"
+                except Exception:
+                    probe_result = "probe_failed"
+
+            if dashboard:
+                dashboard.update(
+                    last_probe_result=probe_result,
+                    last_probe_time=_time.time(),
+                    health_status=status,
+                    health_score=str(health_score),
+                    staking_status=staking_status,
+                )
+        except Exception as exc:
+            logger.debug("Self-probe check failed: %s", exc)
+            if dashboard:
+                dashboard.update(
+                    last_probe_result="error",
+                    last_probe_time=_time.time(),
+                )
+
+
+async def _dashboard_loop(
+    ctx: "_NodeContext",
+    sm: NodeStateMachine,
+    stop_event: asyncio.Event,
+    dashboard,  # noqa: ANN001
+) -> None:
+    """Update the live CLI dashboard every second."""
+    from app.node_logging import activity
+
+    while not stop_event.is_set():
+        try:
+            await asyncio.wait_for(stop_event.wait(), timeout=1.0)
+            break
+        except asyncio.TimeoutError:
+            pass
+
+        dashboard.update(
+            state=sm.state.value,
+            node_id=ctx.node_id,
+            connections_served=activity.connections_served,
+            connections_active=activity.connections_active,
+            last_health_check=activity.last_health_check or 0,
+            health_status=activity.last_health_status or "—",
+        )
+
+
 # ── Orchestrator ─────────────────────────────────────────────────────────────
 
 async def _run(
@@ -452,11 +598,25 @@ async def _run(
     state_machine: NodeStateMachine | None = None,
 ) -> None:
     """Main orchestrator loop. Drives phases and handles retries."""
+    # Deferred heavy imports — keep CLI startup fast
+    import httpx  # noqa: E402
+    from app.errors import NodeError, NodeErrorCode, classify_error  # noqa: E402
+    from app.node_logging import activity, setup_cli_logging  # noqa: E402
+    from app.node_logging import _STATUS_INTERVAL  # noqa: E402
+    from app.proxy_handler import handle_client  # noqa: E402
+    from app.registration import (  # noqa: E402
+        check_node_status, deregister_node, detect_public_ip,
+        register_node, request_probe, save_gateway_ca_cert,
+    )
+    from app.tls import (  # noqa: E402
+        check_certificate_expiry, create_mtls_server_ssl_context,
+        create_server_ssl_context, ensure_certificates,
+    )
+
     s = settings_override or load_settings()
 
-    # Configure logging from settings
-    log_level = getattr(logging, s.LOG_LEVEL.upper(), logging.INFO)
-    logging.getLogger().setLevel(log_level)
+    # Configure logging from settings (updates both logger and handler levels)
+    setup_cli_logging(s.LOG_LEVEL)
 
     own_stop_event = stop_event is None
     if stop_event is None:
@@ -488,10 +648,14 @@ async def _run(
         ctx = _NodeContext(s, http_client)
         renewal_task = None
         health_task = None
+        status_task = None
+        probe_task = None
+        dashboard = None
 
         try:
             # ── Phase: INITIALIZING ──
             _report(NodeState.INITIALIZING, "Loading identity and certificates")
+            logger.info("Initializing node (version %s)...", __version__)
             try:
                 await _phase_init(ctx)
             except KeystorePassphraseRequired:
@@ -523,6 +687,7 @@ async def _run(
 
             # ── Phase: REGISTERING ──
             _report(NodeState.REGISTERING, "Registering with coordination server")
+            logger.info("Registering with %s ...", s.COORDINATION_API_URL)
             try:
                 await _phase_register(ctx)
             except NodeError:
@@ -530,10 +695,14 @@ async def _run(
             except Exception as exc:
                 raise classify_error(exc)
 
+            logger.info("Registration successful  node_id=%s", ctx.node_id[:16])
+            activity.last_registration_time = asyncio.get_event_loop().time()
+
             # mTLS rebind if upgrade happened
             if ctx.s.MTLS_ENABLED and os.path.isfile(ctx.s.GATEWAY_CA_CERT_PATH):
                 try:
                     await _rebind_server_mtls(ctx)
+                    logger.info("mTLS active -- gateway authentication enabled")
                 except Exception:
                     logger.warning("mTLS server rebind failed", exc_info=True)
 
@@ -548,6 +717,38 @@ async def _run(
                 ctx.node_id, display_wallet,
                 f"{ctx.upnp_endpoint[0]}:{ctx.upnp_endpoint[1]}" if ctx.upnp_endpoint else "disabled",
             )
+
+            # Live dashboard for CLI standalone mode
+            dashboard = None
+            dashboard_task = None
+            probe_task = None
+            if own_stop_event and sys.stdin.isatty():
+                try:
+                    from app.cli_ui import StatusDashboard
+                    dashboard = StatusDashboard()
+                    dashboard.update(
+                        node_id=ctx.node_id,
+                        state="running",
+                        staking_address=ctx.staking_address,
+                        public_ip=ctx.public_ip,
+                        port=s.PUBLIC_PORT or s.NODE_PORT,
+                        upnp=bool(ctx.upnp_endpoint),
+                        version=__version__,
+                    )
+                    dashboard.start()
+                except Exception:
+                    dashboard = None
+                    logger.info(
+                        "--- Node is RUNNING --- "
+                        "Listening on port %d | IP %s | Ctrl+C to stop",
+                        s.NODE_PORT, ctx.public_ip,
+                    )
+            else:
+                logger.info(
+                    "--- Node is RUNNING --- "
+                    "Listening on port %d | IP %s | Ctrl+C to stop",
+                    s.NODE_PORT, ctx.public_ip,
+                )
 
             # Start UPnP renewal
             if ctx.upnp_endpoint and s.UPNP_LEASE_DURATION > 0:
@@ -570,6 +771,21 @@ async def _run(
             # Start health monitoring
             health_task = asyncio.create_task(_health_loop(ctx, sm, stop_event))
 
+            # Start periodic status summary (text mode) or dashboard (rich mode)
+            if dashboard:
+                status_task = asyncio.create_task(
+                    _dashboard_loop(ctx, sm, stop_event, dashboard)
+                )
+            else:
+                status_task = asyncio.create_task(
+                    _status_summary_loop(ctx, stop_event, _STATUS_INTERVAL)
+                )
+
+            # Self-probe loop — checks reachability from coordination's perspective
+            probe_task = asyncio.create_task(
+                _self_probe_loop(ctx, sm, stop_event, dashboard)
+            )
+
             # Wait for stop or health loop exit (reconnection trigger)
             done, pending = await asyncio.wait(
                 [asyncio.create_task(stop_event.wait()), health_task],
@@ -580,6 +796,8 @@ async def _run(
 
             # If health loop exited (RECONNECTING), handle reconnection
             if sm.state == NodeState.RECONNECTING:
+                logger.warning("Connection lost -- attempting reconnection...")
+                activity.record_reconnect()
                 # Cancel health task if still running
                 if health_task and not health_task.done():
                     health_task.cancel()
@@ -626,6 +844,10 @@ async def _run(
         except Exception as exc:
             raise classify_error(exc)
         finally:
+            # Stop dashboard first so shutdown logs are visible
+            if dashboard:
+                dashboard.stop()
+
             logger.info("Shutting down…")
 
             # Stop accepting new connections
@@ -634,7 +856,7 @@ async def _run(
                 await ctx.server.wait_closed()
 
             # Cancel background tasks
-            for task in (renewal_task, health_task):
+            for task in (renewal_task, health_task, status_task, probe_task):
                 if task is not None and not task.done():
                     task.cancel()
                     try:
@@ -654,11 +876,13 @@ async def _run(
     logger.info("Home Node shut down cleanly")
 
 
-def _do_reset() -> None:
-    """Handle --reset: delete config and optionally identity key."""
+def _do_reset() -> bool:
+    """Delete all config, identity key, and certificates.
+
+    Returns True if reset was performed, False if cancelled.
+    """
     from app.paths import config_dir
 
-    keep_identity = "--keep-identity" in sys.argv
     s = load_settings()
 
     # Check both well-known config dir and CWD for config files
@@ -668,88 +892,135 @@ def _do_reset() -> None:
 
     env_file = str(wellknown_env) if wellknown_env.is_file() else cwd_env
     certs_dir = os.path.dirname(os.path.abspath(s.IDENTITY_KEY_PATH)) or "certs"
-    identity_path = os.path.abspath(s.IDENTITY_KEY_PATH)
 
-    if not keep_identity and sys.stdin.isatty():
+    if sys.stdin.isatty():
         print("WARNING: This will delete your identity key and all configuration.")
         confirm = input("Type YES to confirm: ").strip()
         if confirm != "YES":
             print("Reset cancelled.")
-            sys.exit(0)
+            return False
 
     # Delete .env
     if os.path.isfile(env_file):
         os.remove(env_file)
         print(f"Removed {env_file}")
 
-    # Delete certs (except identity key if --keep-identity)
+    # Delete certs directory (identity key + all certificates)
     if os.path.isdir(certs_dir):
         import shutil
-        if keep_identity:
-            for f in os.listdir(certs_dir):
-                fp = os.path.join(certs_dir, f)
-                if os.path.abspath(fp) != identity_path and os.path.isfile(fp):
-                    os.remove(fp)
-                    print(f"Removed {fp}")
-            print(f"Kept identity key: {identity_path}")
-        else:
-            shutil.rmtree(certs_dir)
-            print(f"Removed {certs_dir}/")
+        shutil.rmtree(certs_dir)
+        print(f"Removed {certs_dir}/")
 
-    print("Reset complete." + (" Identity key preserved." if keep_identity else ""))
+    print("Reset complete.\n")
+    return True
 
 
-def main() -> None:
-    if len(sys.argv) > 1 and sys.argv[1] in ("--version", "-V"):
-        print(f"space-router-node {__version__}")
-        sys.exit(0)
+def _build_arg_parser() -> argparse.ArgumentParser:
+    """Build the CLI argument parser."""
+    parser = argparse.ArgumentParser(
+        prog="space-router-node",
+        description="SpaceRouter Home Node — proxy node daemon",
+    )
+    parser.add_argument(
+        "--version", "-V", action="version",
+        version=f"space-router-node {__version__}",
+    )
+    parser.add_argument(
+        "--reset", action="store_true",
+        help="Clear all config and re-run onboarding wizard",
+    )
+    parser.add_argument(
+        "--setup", action="store_true",
+        help="Re-run onboarding wizard (without clearing)",
+    )
 
-    if "--reset" in sys.argv:
-        _do_reset()
-        sys.exit(0)
+    # Network settings
+    net = parser.add_argument_group("network")
+    net.add_argument(
+        "--port", "-p", type=int, metavar="PORT",
+        help="Node listen port (default: 9090)",
+    )
+    net.add_argument(
+        "--public-url", metavar="HOST",
+        help="Public hostname or IP (tunnel mode)",
+    )
+    net.add_argument(
+        "--public-port", type=int, metavar="PORT",
+        help="Advertised public port (tunnel mode)",
+    )
+    net.add_argument(
+        "--no-upnp", action="store_true",
+        help="Disable UPnP automatic port forwarding",
+    )
 
-    # --password-file: read passphrase from file for automation/systemd
-    if "--password-file" in sys.argv:
-        idx = sys.argv.index("--password-file")
-        if idx + 1 >= len(sys.argv):
-            print("Error: --password-file requires a file path argument", file=sys.stderr)
-            sys.exit(1)
-        pw_path = sys.argv[idx + 1]
+    # Identity / wallet settings
+    wallet = parser.add_argument_group("wallet")
+    wallet.add_argument(
+        "--staking-address", metavar="ADDR",
+        help="Staking wallet address",
+    )
+    wallet.add_argument(
+        "--collection-address", metavar="ADDR",
+        help="Collection wallet address",
+    )
+    wallet.add_argument(
+        "--password-file", metavar="PATH",
+        help="Read identity passphrase from file",
+    )
+
+    # Misc
+    parser.add_argument(
+        "--log-level", metavar="LEVEL",
+        choices=["DEBUG", "INFO", "WARNING", "ERROR"],
+        help="Log level (default: INFO)",
+    )
+    parser.add_argument(
+        "--label", metavar="NAME",
+        help="Human-readable node label",
+    )
+
+    return parser
+
+
+def _apply_cli_args(args: argparse.Namespace) -> None:
+    """Override environment variables from CLI arguments.
+
+    CLI args take precedence over .env values. We set os.environ so that
+    pydantic-settings picks them up when load_settings() is called.
+    """
+    if args.port is not None:
+        os.environ["SR_NODE_PORT"] = str(args.port)
+    if args.public_url is not None:
+        os.environ["SR_PUBLIC_IP"] = args.public_url
+    if args.public_port is not None:
+        os.environ["SR_PUBLIC_PORT"] = str(args.public_port)
+    if args.no_upnp:
+        os.environ["SR_UPNP_ENABLED"] = "false"
+    if args.staking_address is not None:
+        os.environ["SR_STAKING_ADDRESS"] = args.staking_address
+    if args.collection_address is not None:
+        os.environ["SR_COLLECTION_ADDRESS"] = args.collection_address
+    if args.log_level is not None:
+        os.environ["SR_LOG_LEVEL"] = args.log_level
+    if args.label is not None:
+        os.environ["SR_NODE_LABEL"] = args.label
+    if args.password_file is not None:
         try:
-            with open(pw_path) as f:
+            with open(args.password_file) as f:
                 os.environ["SR_IDENTITY_PASSPHRASE"] = f.readline().rstrip("\n")
         except (OSError, IOError) as exc:
             print(f"Error reading password file: {exc}", file=sys.stderr)
             sys.exit(1)
 
-    # Setup wizard: trigger when identity key is missing, when --setup is
-    # passed explicitly, or when config looks unconfigured (no staking address
-    # and default coordination URL). Only in interactive TTY.
-    s = load_settings()
-    explicit_setup = "--setup" in sys.argv
-    needs_setup = (
-        explicit_setup
-        or not os.path.isfile(s.IDENTITY_KEY_PATH)
-        or (not s.STAKING_ADDRESS and s.COORDINATION_API_URL == _default_coordination_url())
-    )
-    if needs_setup and sys.stdin.isatty():
-        if not _first_run_setup():
-            sys.exit(0)
-        # Reload settings so _run() picks up values written to .env
-        reloaded_settings = load_settings()
-        try:
-            asyncio.run(_run(settings_override=reloaded_settings))
-        finally:
-            if sys.platform == "win32":
-                signal.signal(signal.SIGINT, signal.SIG_DFL)
-                signal.signal(signal.SIGTERM, signal.SIG_DFL)
-        return
+
+def _run_node(settings_override=None) -> None:  # noqa: ANN001
+    """Run the node with proper error handling and signal cleanup."""
+    from app.errors import NodeError
 
     try:
-        asyncio.run(_run())
+        asyncio.run(_run(settings_override=settings_override))
     except KeystorePassphraseRequired:
         if sys.stdin.isatty():
-            # Prompt for passphrase and retry
             try:
                 passphrase = getpass.getpass("Identity key passphrase: ")
             except (EOFError, KeyboardInterrupt):
@@ -761,10 +1032,6 @@ def main() -> None:
             except NodeError as exc:
                 logger.error("Node failed: %s", exc.user_message)
                 sys.exit(1)
-            finally:
-                if sys.platform == "win32":
-                    signal.signal(signal.SIGINT, signal.SIG_DFL)
-                    signal.signal(signal.SIGTERM, signal.SIG_DFL)
         else:
             print(
                 "Identity key is encrypted. Set SR_IDENTITY_PASSPHRASE "
@@ -779,6 +1046,48 @@ def main() -> None:
         if sys.platform == "win32":
             signal.signal(signal.SIGINT, signal.SIG_DFL)
             signal.signal(signal.SIGTERM, signal.SIG_DFL)
+
+
+def main() -> None:
+    from app.node_logging import setup_cli_logging, reset_activity  # noqa: E402
+
+    setup_cli_logging()
+    reset_activity()
+
+    parser = _build_arg_parser()
+    args = parser.parse_args()
+
+    # Apply CLI args as env var overrides before loading settings
+    _apply_cli_args(args)
+
+    # --reset: clear everything, then re-run wizard and start
+    if args.reset:
+        if not _do_reset():
+            sys.exit(0)
+        # Fall through to onboarding wizard
+        if sys.stdin.isatty():
+            if not _first_run_setup():
+                sys.exit(0)
+            _run_node(settings_override=load_settings())
+        else:
+            print("Reset complete. Run again to reconfigure.", file=sys.stderr)
+        return
+
+    # Setup wizard: trigger when --setup is passed, identity key is missing,
+    # or config looks unconfigured. Only in interactive TTY.
+    s = load_settings()
+    needs_setup = (
+        args.setup
+        or not os.path.isfile(s.IDENTITY_KEY_PATH)
+        or (not s.STAKING_ADDRESS and s.COORDINATION_API_URL == _default_coordination_url())
+    )
+    if needs_setup and sys.stdin.isatty():
+        if not _first_run_setup():
+            sys.exit(0)
+        _run_node(settings_override=load_settings())
+        return
+
+    _run_node()
 
 
 if __name__ == "__main__":

@@ -192,14 +192,11 @@ class Api:
             logger.exception("Failed to save network mode")
             return {"ok": False, "error": str(exc)}
 
-    def fresh_restart(self, keep_addresses: bool = False) -> dict:
-        """Stop node, reset config, return to onboarding.
+    def fresh_restart(self) -> dict:
+        """Stop node, fully reset config and identity, return to onboarding.
 
         Uses a short timeout — if the node is stuck (e.g. in a registration
         loop), we force-proceed rather than blocking the UI.
-
-        Args:
-            keep_addresses: if True, preserves staking/collection addresses.
         """
         import os
         try:
@@ -208,10 +205,7 @@ class Api:
             logger.warning("Node stop timed out during fresh restart — proceeding anyway")
 
         try:
-            self._config.reset(
-                keep_addresses=keep_addresses,
-                keep_identity=keep_addresses,  # "Clear Everything" also removes identity key
-            )
+            self._config.reset()
             # Clear env vars so next start picks up fresh config
             for key in list(os.environ.keys()):
                 if key.startswith("SR_"):
